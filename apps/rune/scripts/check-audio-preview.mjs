@@ -10,7 +10,7 @@ import {fileURLToPath} from 'node:url'
 import {WebSocketServer} from 'ws'
 const rune=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..')
 const args=process.argv.slice(2),option=name=>{const i=args.indexOf(name);return i>=0?args[i+1]:null}
-const binary=option('--binary')??path.join(rune,'target/debug/hermes-rune')
+const binary=option('--binary')??path.join(rune,'target/debug/herune')
 const out=path.resolve(option('--out')??'/tmp/hermes-audio-preview-proof')
 fs.mkdirSync(out,{recursive:true})
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'hermes-audio-preview-home-'))

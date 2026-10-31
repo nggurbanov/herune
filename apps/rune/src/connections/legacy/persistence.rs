@@ -72,7 +72,7 @@ impl AuthBundle {
         let raw: EncodedAuth =
             serde_json::from_str(encoded).map_err(|_| "The Legacy credential bundle is invalid")?;
         if raw.version != 1 {
-            return Err("The Legacy credential bundle requires a newer Hermes app".into());
+            return Err("The Legacy credential bundle requires a newer Herune app".into());
         }
         let mut bundle = Self {
             token: raw.token,

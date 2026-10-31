@@ -65,9 +65,18 @@ impl Snapshot {
     fn parse_owned(value: &Value, profile: Option<&str>, canonical: bool) -> Result<Self, String> {
         let runtime = required_str(value, "session_id")?.to_owned();
         valid_scope(&runtime)?;
+        let legacy_stored = if canonical {
+            None
+        } else {
+            value
+                .get("session_key")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("resumed").and_then(Value::as_str))
+        };
         let stored = value
             .get("stored_session_id")
             .and_then(Value::as_str)
+            .or(legacy_stored)
             .unwrap_or(&runtime)
             .to_owned();
         valid_scope(&stored)?;
@@ -672,6 +681,18 @@ impl SessionTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn remote_dashboard_resume_preserves_its_durable_session_key() {
+        for key in ["session_key", "resumed"] {
+            let mut value =
+                json!({"session_id":"live-handle","info":{"profile_name":"work"},"messages":[]});
+            value[key] = json!("stored-history");
+            let snapshot = Snapshot::parse(&value, "work", false).unwrap();
+            assert_eq!(snapshot.runtime, "live-handle");
+            assert_eq!(snapshot.stored, "stored-history");
+        }
+    }
+
     #[test]
     fn snapshot_requires_real_native_owner_and_generation() {
         let value = json!({"session_id":"live","stored_session_id":"stored","revision":3,"execution_generation":4,"info":{"profile_name":"work","desktop_protocol":"hermes-gateway-v1"}});

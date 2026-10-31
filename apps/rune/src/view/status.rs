@@ -186,7 +186,7 @@ pub fn bar(s: &Viewer, k: &Kit) -> El {
         ));
     }
     bar.child(
-        text(format!("Hermes {}", env!("CARGO_PKG_VERSION")))
+        text(format!("Herune {}", env!("CARGO_PKG_VERSION")))
             .font(k.ty.small)
             .color(k.c.text_faint),
     )

@@ -103,7 +103,8 @@ pub(crate) fn live_tool_output(tool: &serde_json::Value) -> &str {
 }
 
 pub fn timeline(s: &Viewer, p: &Pal) -> El {
-    let k = rune_theme_opencode::kit(p.dark);
+    let theme = super::theme::kit(&s.theme_preset, p.dark);
+    let k = &theme;
     let owner = s.composer_scope();
     let mut stack = col()
         .key("timeline")
@@ -981,7 +982,7 @@ pub(crate) fn markdown_audio_labels(src: &str) -> Vec<(usize, String)> {
 }
 
 fn markdown_audio_view(s: &Viewer, p: &Pal, src: &str, message: &str, part: &str) -> El {
-    let kit = Kit::neutral(p.dark);
+    let kit = super::theme::kit(&s.theme_preset, p.dark);
     let mut embeds = std::collections::HashMap::new();
     for occurrence in rune_kit::markdown::link_occurrences_cached(src) {
         let Some((path, media)) = audio_target(&occurrence.destination) else {
@@ -1046,7 +1047,7 @@ fn markdown_search_view_impl(
     part: &str,
     embeds: std::collections::HashMap<std::ops::Range<usize>, El>,
 ) -> El {
-    let kit = Kit::neutral(p.dark);
+    let kit = super::theme::kit(&s.theme_preset, p.dark);
     let style = MarkdownStyle::from_kit(&kit)
         .text(p.text)
         .muted(p.muted)

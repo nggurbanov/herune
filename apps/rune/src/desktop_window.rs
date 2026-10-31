@@ -45,7 +45,7 @@ pub fn application(launch: Option<app::windows::Bootstrap>) -> App<Viewer> {
             ("error", app::error_scene),
         ],
         min_size: Some((1024.0, 520.0)),
-        ..AppSpec::new("Hermes", (1440.0, 900.0), Viewer::new, view::app)
+        ..AppSpec::new("Herune", (1440.0, 900.0), Viewer::new, view::app)
     };
     let application = rune::App::new(spec)
         .init(move || match launch {

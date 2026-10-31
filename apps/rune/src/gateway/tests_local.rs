@@ -148,6 +148,7 @@ fn native_model_catalog(fresh: bool) {
         );
         if !fresh {
             let sessions = request(&mut ws, "session.list", "work");
+            assert_eq!(sessions["params"]["scope"], "stored");
             answer(
                 &mut ws,
                 &sessions,

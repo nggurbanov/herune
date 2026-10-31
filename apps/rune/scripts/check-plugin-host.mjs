@@ -8,7 +8,7 @@ import { spawn, execFileSync } from 'node:child_process'
 const rune = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
 const option = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : null }
-const binary = option('--binary') ?? path.join(rune, 'target/debug/hermes-rune')
+const binary = option('--binary') ?? path.join(rune, 'target/debug/herune')
 const snapshot = option('--snapshot')
 const canonical = args.includes('--canonical')
 if (!process.env.DISPLAY && process.platform === 'linux') throw new Error('Run this native smoke under xvfb-run -a or an isolated test display')

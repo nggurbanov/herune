@@ -256,7 +256,7 @@ pub(super) async fn deliver(
                 Some(SERVICE),
                 "Notify",
                 &(
-                    "Hermes",
+                    "Herune",
                     0u32,
                     "",
                     &request.notice.title,

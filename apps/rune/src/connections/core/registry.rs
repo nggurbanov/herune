@@ -96,7 +96,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Registry, String> {
     let mut registry: Registry = serde_json::from_value(raw.clone())
         .map_err(|_| "The saved connection registry is invalid")?;
     if !matches!(registry.version, 1 | 2) {
-        return Err("This saved connection registry requires a newer Hermes app".into());
+        return Err("This saved connection registry requires a newer Herune app".into());
     }
     if let Some(legacy) = &registry.legacy {
         if registry.version != 2 {
@@ -140,7 +140,7 @@ pub(super) fn decode(bytes: &[u8]) -> Result<Registry, String> {
 }
 pub(super) fn encode(registry: &Registry) -> Result<Vec<u8>, String> {
     if !matches!(registry.version, 1 | 2) {
-        return Err("This saved connection registry requires a newer Hermes app".into());
+        return Err("This saved connection registry requires a newer Herune app".into());
     }
     if let Some(legacy) = &registry.legacy {
         if registry.version != 2 {

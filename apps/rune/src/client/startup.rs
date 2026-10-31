@@ -96,7 +96,7 @@ impl Document {
     fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err(
-                "Saved startup preferences require a newer Hermes app; their file was retained"
+                "Saved startup preferences require a newer Herune app; their file was retained"
                     .into(),
             );
         }

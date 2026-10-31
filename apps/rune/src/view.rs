@@ -4,6 +4,7 @@
 
 mod audio;
 pub(crate) mod background;
+mod branding;
 pub(crate) mod client;
 pub(crate) mod client_settings;
 pub(crate) mod composer;
@@ -40,6 +41,7 @@ pub(crate) mod sounds;
 mod status;
 pub(crate) mod subagents;
 pub(crate) mod terminal;
+pub(crate) mod theme;
 pub(crate) mod transcript;
 mod windows;
 
@@ -54,10 +56,12 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     s.inspect_native_window(cx);
     let system_dark = cx.system_dark();
     s.client_settings.system_dark.set(system_dark);
-    let dark = s.theme.unwrap_or(system_dark);
-    let local_kit = s.client_settings.theme_kit(rune_theme_opencode::kit(dark));
+    let dark = theme::appearance(&s.theme_preset, s.theme.unwrap_or(system_dark));
+    let base_kit = theme::kit(&s.theme_preset, dark);
+    let local_kit = s.client_settings.theme_kit(&base_kit);
     let k = &local_kit;
-    let p = pal(dark);
+    let themed_pal = palette::from_kit(pal(dark), k);
+    let p = &themed_pal;
     let mut layer = Vec::new();
     let settings_open = s.route == crate::pages::Route::Settings;
     let main = if s.connection_form && !settings_open {
@@ -104,7 +108,7 @@ pub fn app(s: &Viewer, cx: &mut Cx<Viewer>) -> El {
     col()
         .key("hermes-window")
         .role("window")
-        .label("Hermes Desktop")
+        .label("Herune")
         .w_full()
         .h_full()
         .fill(k.c.bg_deep)

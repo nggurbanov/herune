@@ -11,7 +11,7 @@ test('frozen package binds source and binary and rejects mismatches in Unicode p
   try {
     const root = join(t, 'snapshot')
     const put = (p, data) => { const dest = join(root, p); mkdirSync(dirname(dest), {recursive:true}); writeFileSync(dest, data) }
-    for (const p of ['LICENSE', 'apps/desktop/assets/icon.png', 'apps/rune/THIRD_PARTY_NOTICES.md', 'apps/rune/licenses/license', 'apps/rune/assets/plugin-host/THIRD_PARTY_LICENSES.txt', ...['symphonia-core','symphonia-metadata','symphonia-format-riff','symphonia-format-isomp4'].map(c => `apps/rune/vendor/${c}/license`)]) put(p, 'frozen')
+    for (const p of ['LICENSE', 'apps/rune/assets/branding/icon-512.png', 'apps/rune/THIRD_PARTY_NOTICES.md', 'apps/rune/licenses/license', 'apps/rune/assets/plugin-host/THIRD_PARTY_LICENSES.txt', ...['symphonia-core','symphonia-metadata','symphonia-format-riff','symphonia-format-isomp4'].map(c => `apps/rune/vendor/${c}/license`)]) put(p, 'frozen')
     const archive = join(t, 'source ü.tar'), list = join(t, 'list'), binary = join(t, 'binary'), manifest = join(t, 'manifest')
     assert.equal(spawnSync('tar', ['-cf', archive, '-C', root, '.']).status, 0)
     writeFileSync(binary, 'frozen binary'); writeFileSync(list, 'fixture\0')

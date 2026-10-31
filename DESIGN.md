@@ -10,17 +10,17 @@ baseline and remains authoritative for behaviors being ported.
 ## Physical context and appearance
 
 The same person reads and resumes long conversations at a desk in daylight and
-returns in a dim room in the evening. Support OpenCode's real light and dark
-appearances and follow the OS preference unless explicitly selected. Do not
+returns in a dim room in the evening. Support System, Light and Dark modes and the built-in T3 Code color presets.
+System follows the OS preference; fixed-appearance presets select their authored
+light or dark palette, while Catppuccin auto follows the selected mode. Do not
 choose dark merely because this is an agent tool.
 
 ## Color strategy
 
 Restrained: semantic neutral surfaces, quiet hairlines, accent for active intent
-and status. Consume rune-theme-opencode's palette and rune-kit tokens directly.
-No independently guessed hex palette, gratuitous gradients, glass, nested cards
-or colorful terminal-like chrome. App-specific color decisions use semantic
-roles; the reference theme owns concrete color conversion and values.
+and status. Map the T3 Code presets to rune-kit semantic tokens consistently across the
+shell, transcript and child windows. Preserve OpenCode as an available preset.
+Do not introduce gratuitous gradients, glass, nested cards or colorful chrome.
 
 ## Typography
 
@@ -54,8 +54,8 @@ usable overflow/collapsed panes rather than hide active conversation state.
 
 Prefer real rune-kit buttons, inputs, pickers, Markdown, scroll/virtual rows and
 split primitives. Adapt original OpenCode transcript, tool-group, picker and
-composer view functions where their assumptions fit Hermes. Preserve Hermes
-branding. Empty/loading/error/reconnecting/read-only states are distinct; an
+composer view functions where their assumptions fit Hermes. Use Herune product branding and the owner-supplied artwork; preserve connected
+Hermes agents' own names and avatars. Empty/loading/error/reconnecting/read-only states are distinct; an
 unavailable feature must not appear to execute through a dummy handler.
 
 ## Interaction and motion
@@ -79,7 +79,7 @@ Tier and a segmented Permissions selector with the selected policy description.
 Hermes dictation, voice-engine and primary send/stop controls remain available.
 This supersedes the earlier three separate model/reasoning/access triggers. The picker has a narrow provider/favorites rail, search,
 selected rows with checkmarks, favorite toggles and provider sublabels.
-Keep the actual OpenCode light/dark palette and Rune controls. Do not copy T3's
+Keep Rune controls and apply the selected color preset consistently. Do not copy T3's
 provider list or invent capabilities. Draft settings remain scoped to their
 connection/profile/conversation and are not the model used by existing history.
 Hermes approval modes remain Manual/Smart/Off. Its voice fan retains separate
@@ -100,7 +100,7 @@ other screens are subsequent increments, not simulated functionality.
 
 Shape brief explicitly confirmed by the user. Direction probes and a new
 north-star mock are skipped: this is a reference-led port with a fixed Hermes
-composition and user-selected real OpenCode theme/components, not an unresolved
+composition and the user-selected color theme with Rune components, not an unresolved
 new visual composition. Upstream reference renders and native screenshot
 inspection are the visual evidence. Do not rasterize UI text or controls.
 

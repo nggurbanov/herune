@@ -317,3 +317,26 @@ fn catalog_reply_and_error_are_separate_for_opposite_intents() {
     ));
     assert!(composer.catalog_loading_for(&native));
 }
+
+#[test]
+fn remote_dashboard_empty_policy_values_keep_inherited_picks_sendable() {
+    for fast in [None, Some(false)] {
+        let mut composer = Composer::new();
+        let scope = scope(1, "work", Some("stored"));
+        let policy = crate::conversation::SessionPolicy {
+            reasoning: Some(String::new()),
+            service_tier: Some(String::new()),
+            fast,
+            ..Default::default()
+        };
+        composer.reconcile_policy(&scope, &policy);
+        let draft = composer.draft(&scope).unwrap();
+        assert_eq!(
+            draft.session_policy, policy,
+            "Observed policy stays authoritative"
+        );
+        assert!(draft.reasoning.is_none());
+        assert_eq!(draft.service_tier.as_deref(), fast.map(|_| "normal"));
+        assert!(!draft.reasoning_changed && !draft.service_tier_changed);
+    }
+}

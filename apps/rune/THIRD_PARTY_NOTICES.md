@@ -59,3 +59,10 @@ must preserve these notices and make the corresponding modified MPL-covered
 source available. The native audio ledger describes the narrow patch scope.
 The synthetic compressed audio fixtures have their generation commands and
 hashes in [`assets/test-audio/manifest.json`](assets/test-audio/manifest.json).
+
+### T3 Code theme presets
+
+The preset color values in `assets/t3-theme-reference.json` are adapted from
+`apps/web/src/index.css` in https://github.com/yappologistic/t3code, source
+revision `bf2ec5ab293ce0a761b323e3a275d5265a6ce838`. Copyright (c) 2026
+T3 Tools Inc.; distributed under the MIT license in `licenses/t3-code-MIT.txt`.

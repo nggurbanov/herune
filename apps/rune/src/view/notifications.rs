@@ -18,7 +18,7 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
             stick_bottom: false,
         });
     body = body.child(text("Notifications").font(k.ty.body_medium).color(k.c.text_base))
-        .child(text("These preferences belong to this device. Hermes keeps background conversations quiet and shows notices when your attention is needed.").font(k.ty.ui).color(k.c.text_muted).wrap())
+        .child(text("These preferences belong to this device. Herune keeps background conversations quiet and shows notices when your attention is needed.").font(k.ty.ui).color(k.c.text_muted).wrap())
         .child(text(state.availability.label()).key("native-notifications-availability").font(k.ty.small).color(if matches!(state.availability, Availability::Unavailable(_)) { k.c.danger.fg } else { k.c.text_muted }).wrap())
         .child(Switch::new(state.prefs.enabled).label("Enable native notifications").on_toggle(|s: &mut Viewer| s.notification_action(Action::Enabled(!s.notifications.prefs.enabled))).build(k).key("native-notifications-enabled"));
     for kind in Kind::ALL {

@@ -17,7 +17,7 @@ import net from 'node:net'
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
 const option = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
-const binary = path.resolve(option('--binary') ?? path.join(app, 'target/debug/hermes-rune'))
+const binary = path.resolve(option('--binary') ?? path.join(app, 'target/debug/herune'))
 const out = path.resolve(option('--out') ?? fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-legacy-settings-evidence-')))
 const only = option('--case')
 let bridge, fixture, credentials, bridgeLog = '', bridgeId = 0; const responses = new Map(), evidence = []

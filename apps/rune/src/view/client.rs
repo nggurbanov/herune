@@ -1,7 +1,7 @@
 //! Preferences owned by the standalone client, independent of agent profiles.
 use crate::app::Viewer;
 use rune::{El, ScrollSpec, col, el, row, text};
-use rune_kit::{Button, ButtonVariant, Kit, Switch};
+use rune_kit::{Button, ButtonVariant, Kit, Select, Switch};
 fn choice(label: &str, selected: bool, f: impl Fn(&mut Viewer) + 'static, k: &Kit) -> El {
     Button::new(label)
         .variant(if selected {
@@ -96,6 +96,20 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
                                 )),
                         ),
                 )
+                .child({
+                    let labels: Vec<&str> = super::theme::OPTIONS.iter().map(|(_, label)| *label).collect();
+                    let selected = super::theme::OPTIONS.iter().find(|(id, _)| *id == s.theme_preset).map(|(_, label)| *label).unwrap_or("T3 Default");
+                    col().gap(8.0).child(text("Color theme").font(k.ty.ui_medium).color(k.c.text_base))
+                        .child(row().w(280.0).child(Select::new("theme-preset", &labels).current(Some(selected))
+                            .width(280.0).open(s.client_settings.open.as_deref() == Some("theme-preset"))
+                            .on_toggle(|s: &mut Viewer| s.client_settings.open = Some("theme-preset".into()))
+                            .on_close(|s: &mut Viewer| s.client_settings.open = None)
+                            .on_choose(|s: &mut Viewer, value, tx| {
+                                if let Some((id, _)) = super::theme::OPTIONS.iter().find(|(_, label)| *label == value) { s.theme_preset = (*id).into(); }
+                                s.client_settings.open = None; tx.instant();
+                            }).build(k, layer)))
+                        .child(text("Some presets use a fixed light or dark appearance; Catppuccin (auto) follows the mode above.").font(k.ty.small).color(k.c.text_muted).wrap())
+                })
                 .child(
                     Switch::new(s.simple_mode)
                         .label("Simple mode")
@@ -130,9 +144,9 @@ pub fn page(s: &Viewer, k: &Kit, layer: &mut Vec<El>) -> El {
         }
         "shortcuts" => return crate::view::client_settings::shortcuts(s, k),
         _ => {
-            body=body.child(text("Hermes").font(k.ty.body_medium).color(k.c.text_base))
+            body=body.child(super::branding::logo(96.0)).child(text("Herune").font(k.ty.body_medium).color(k.c.text_base))
     .child(text(format!("Standalone desktop · {}",env!("CARGO_PKG_VERSION"))).font(k.ty.ui).color(k.c.text_muted))
-    .child(text("Built with Rune and OpenCode UI components. Hermes connects to independently managed local or remote agents.").font(k.ty.ui).color(k.c.text_base).wrap())
+    .child(text("Built with Rune and OpenCode UI components. Herune connects to independently managed local or remote agents.").font(k.ty.ui).color(k.c.text_base).wrap())
     .child(text(format!("Connection: {}\nProfile: {}\nStatus: {}",s.endpoint_label,s.profile,s.status)).font(k.ty.ui).color(k.c.text_muted).wrap().selectable(true))
     .child(text("Third-party notices are included in the application source under apps/rune/THIRD_PARTY_NOTICES.md.").font(k.ty.small).color(k.c.text_faint).wrap());
         }

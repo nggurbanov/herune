@@ -14,7 +14,8 @@ pub(crate) struct CapturedPrimary {
     pub connection: Connection,
     pub lease: Option<Lease>,
     pub backend_proof: BackendProfiles,
-    pub root_proof: BackendRootProof,
+    /// Present only for a native session authority; remote dashboards use named scopes.
+    pub root_proof: Option<BackendRootProof>,
 }
 pub(crate) struct ResolveRequest {
     pub door: RouteDoor,
@@ -32,7 +33,8 @@ pub(crate) struct ResolvedLegacy {
     pub matched_saved: Option<SourceVersion>,
     pub desktop_profile: String,
     pub backend_proof: BackendProfiles,
-    pub root_proof: BackendRootProof,
+    /// Present only for a native session authority; remote dashboards use named scopes.
+    pub root_proof: Option<BackendRootProof>,
     pub(in crate::connections) context: SelectionContext,
     pub(in crate::connections) door: RouteDoor,
 }

@@ -1,6 +1,6 @@
-# Hermes Desktop Rune
+# Herune
 
-A standalone native Hermes desktop client. Rune and OpenCode supply native
+A standalone native desktop client for Hermes agents. Rune and OpenCode supply native
 controls, fonts and both appearances; Hermes retains its navigation, identities,
 conversation ownership and split/group layout. Agents remain independently
 installed and managed. The retained Electron client is the behavior baseline.
@@ -41,6 +41,20 @@ The Command Center exposes explicit backend maintenance/update/restart actions;
 these operate the selected external agent only after the corresponding user
 invocation. They are independent from desktop installation and startup.
 
+## Direct OAuth connections
+
+Settings → Connections → Profile routing supports an existing gateway URL with
+OAuth. Save the URL, select Sign in and complete the native PKCE flow in the
+browser. Tokens remain in the OS credential store.
+
+Remote dashboards keep the same ticket-based WebSocket and session protocol as
+the retained Electron client. A missing `runtime.describe` method is supported
+for a named profile verified against that server's authenticated roster. An
+unmapped per-profile override needs its backend profile selected explicitly.
+Authentication errors, timeouts and malformed runtime evidence never trigger a
+compatibility fallback. Local native gateways still require runtime authority.
+No server proxy, agent update or server configuration change is required.
+
 ## Current surfaces
 
 - Hermes Sessions/Bots navigation, canonical Bot Chats, conversation tabs,
@@ -52,7 +66,7 @@ invocation. They are independent from desktop installation and startup.
   originating input. Hermes dictation and voice actions remain.
 - Native rich transcript, earlier history, canonical edit/retry/restore/branch
   with durable mutation recovery, copy/quote/read aloud, tools and images.
-- Complete native peer windows use the same Hermes application factory, with
+- Complete native peer windows use the same Herune application factory, with
   independently claimed editors, captured sources/profiles, interactive sessions
   and Bot Chat targets. Close Window and Quit are separate commands. Remaining
   lifetime/default/restore/platform work is tracked in
@@ -98,9 +112,9 @@ node apps/rune/scripts/check-notifications.mjs
 xvfb-run -a node apps/rune/scripts/check-preview.mjs
 xvfb-run -a node apps/rune/scripts/check-audio-preview.mjs
 node apps/rune/scripts/check-audio-navigation.mjs
-node apps/rune/scripts/check-peer-windows.mjs --binary /absolute/hermes-rune --out /absolute/evidence
-node apps/rune/scripts/check-startup-routing.mjs --binary /absolute/hermes-rune --out /absolute/startup-evidence
-node apps/rune/scripts/check-fleet.mjs --binary /absolute/hermes-rune --out /absolute/fleet-evidence
+node apps/rune/scripts/check-peer-windows.mjs --binary /absolute/herune --out /absolute/evidence
+node apps/rune/scripts/check-startup-routing.mjs --binary /absolute/herune --out /absolute/startup-evidence
+node apps/rune/scripts/check-fleet.mjs --binary /absolute/herune --out /absolute/fleet-evidence
 python3 apps/rune/vendor/rune/scripts/verify-hermes-source.py
 xvfb-run -a node apps/rune/scripts/check-subagent-windows.mjs
 xvfb-run -a node apps/rune/scripts/check-plugin-host.mjs --canonical
@@ -124,14 +138,14 @@ voice ledger.
 ## macOS alpha from a clone
 
 On macOS 13 or newer, install Xcode Command Line Tools, Rust 1.95.0 with
-`rustup`, and Node.js. From the repository root run:
+`rustup`, Node.js, and CMake (needed to build Opus). From the repository root run:
 
 ```sh
 ./apps/rune/scripts/build-on-mac.sh
 ```
 
 Cargo dependencies must be available via network or cache. The script builds for
-the Mac's architecture and creates `rune-macos-alpha/Hermes.app` and a ZIP,
+the Mac's architecture and creates `rune-macos-alpha/Herune.app` and a ZIP,
 using ad hoc signing. Pass a nonexistent output directory as the first argument
 to choose another location. This signature is not Developer ID and the app is
 not notarized. The macOS build and runtime have not yet been verified on a Mac.

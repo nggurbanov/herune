@@ -279,3 +279,21 @@ fn shared_preferences_process() {
     .unwrap();
     changed.save_patch_at(&base, &path).unwrap();
 }
+
+#[test]
+fn theme_preset_persists_and_preserves_another_windows_changes() {
+    let root = Workspace::new();
+    let path = root.path();
+    let base = Preferences::load_at(&path).unwrap();
+    let mut theme = base.clone();
+    theme.theme_preset = "nord".into();
+    theme.theme = Some(true);
+    theme.save_patch_at(&base, &path).unwrap();
+    let mut other = base.clone();
+    other.show_statusbar = false;
+    other.save_patch_at(&base, &path).unwrap();
+    let restored = Preferences::load_at(&path).unwrap();
+    assert_eq!(restored.theme_preset, "nord");
+    assert_eq!(restored.theme, Some(true));
+    assert!(!restored.show_statusbar);
+}

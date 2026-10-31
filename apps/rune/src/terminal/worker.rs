@@ -388,7 +388,7 @@ fn native(
     }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
-    command.env("TERM_PROGRAM", "Hermes");
+    command.env("TERM_PROGRAM", "Herune");
     command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
     command.env("HERMES_DESKTOP_TERMINAL", "1");
     if !cfg!(target_os = "macos") {

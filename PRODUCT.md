@@ -31,7 +31,10 @@ semantics and its dictation / speak replies / wake-word fan.
 ## Brand Personality
 
 Calm, clear, capable. The user's conversation and agent identity have priority;
-chrome supports the work. Keep Hermes identity, not OpenCode product branding.
+chrome supports the work. Use the Herune product identity and the owner-supplied cat-with-headphones illustration.
+Hermes remains the name of the connected agent backend, not this desktop client.
+The Herune rebrand was approved on 2026-10-31; preserve existing connection,
+profile, storage and credential identities across upgrades.
 
 ## References
 

@@ -8,7 +8,7 @@ import {spawnSync} from 'node:child_process'
 import {fileURLToPath} from 'node:url'
 const app=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..')
 const args=process.argv.slice(2),option=name=>{const i=args.indexOf(name);return i>=0?args[i+1]:null}
-const binary=option('--binary')??path.join(app,'target/debug/hermes-rune')
+const binary=option('--binary')??path.join(app,'target/debug/herune')
 const out=path.resolve(option('--out')??'/tmp/hermes-safe-images-proof')
 fs.mkdirSync(out,{recursive:true})
 const home=fs.mkdtempSync(path.join(os.tmpdir(),'hermes-safe-images-home-'))

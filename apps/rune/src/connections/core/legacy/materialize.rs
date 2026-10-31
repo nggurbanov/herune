@@ -16,7 +16,7 @@ use std::{
 pub(super) struct Material {
     pub connection: Connection,
     pub backend_proof: BackendProfiles,
-    pub root_proof: BackendRootProof,
+    pub root_proof: Option<BackendRootProof>,
     pub parent: Option<Lease>,
     pub matched_saved: Option<SourceVersion>,
     pub tunnel: Option<Box<dyn Tunnel>>,
@@ -130,35 +130,34 @@ impl Core {
         let backend_proof = gateway.backend_profiles()?;
         let root_proof = gateway.backend_root_proof()?;
         require_live(alive)?;
-        if captured.is_some_and(|capture| {
-            capture.root_proof.profile_id != root_proof.profile_id
-                || capture.root_proof.instance_id != root_proof.instance_id
-                || capture.root_proof.authority_epoch != root_proof.authority_epoch
-        }) {
+        if captured.is_some_and(|capture| capture.root_proof != root_proof) {
             return Err("The captured primary runtime authority changed while connecting".into());
         }
         let named = plan
             .backend_profile
             .clone()
             .or(descriptor.descriptor_profile);
-        let target = match named {
-            Some(name) => {
-                if backend_proof
-                    .profiles
-                    .iter()
-                    .filter(|row| row.name == name)
-                    .count()
-                    != 1
-                {
-                    return Err(
-                        "The configured backend profile is missing or ambiguous on this source"
-                            .into(),
-                    );
+        let target =
+            match named {
+                Some(name) => {
+                    if backend_proof
+                        .profiles
+                        .iter()
+                        .filter(|row| row.name == name)
+                        .count()
+                        != 1
+                    {
+                        return Err(
+                            "The configured backend profile is missing or ambiguous on this source"
+                                .into(),
+                        );
+                    }
+                    BackendTarget::Named(name)
                 }
-                BackendTarget::Named(name)
-            }
-            None => BackendTarget::Root(root_proof.clone()),
-        };
+                None => BackendTarget::Root(root_proof.clone().ok_or(
+                    "Choose a backend profile for this remote dashboard before connecting",
+                )?),
+            };
         let selected = SelectedContext::new(&request.desktop_profile, target)?;
         let policy = policy.with_selected(selected)?;
         use sha2::{Digest, Sha256};
@@ -168,7 +167,10 @@ impl Core {
                 serde_json::to_vec(&(
                     "hermes-legacy-resolution-v1",
                     plan.version.fingerprint(),
-                    &root_proof.profile_id,
+                    root_proof
+                        .as_ref()
+                        .map(|proof| proof.profile_id.as_str())
+                        .unwrap_or("legacy-scoped-profile"),
                     policy.fingerprint()
                 ))
                 .expect("route namespace material serializes")
@@ -199,7 +201,11 @@ fn captured_transport(
     primary: &CapturedPrimary,
     profiles: crate::gateway::route::ProfilePolicy,
 ) -> Result<(Connection, WirePolicy, Option<Lease>, Option<SourceVersion>), String> {
-    primary.root_proof.validate()?;
+    if let Some(proof) = &primary.root_proof {
+        proof.validate()?;
+    } else if !matches!(primary.connection.transport(), Connection::Url { .. }) {
+        return Err("A local primary needs native runtime authority".into());
+    }
     if let Some(lease) = &primary.lease {
         if !lease.is_valid()
             || crate::client::connection_key(lease.connection())?

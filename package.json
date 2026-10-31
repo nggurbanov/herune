@@ -1,5 +1,5 @@
 {
-  "name": "hermes-desktop-rune",
+  "name": "herune",
   "version": "0.1.0-alpha.0",
   "description": "Standalone desktop client for existing Hermes agents.",
   "private": true,
@@ -27,13 +27,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nggurbanov/hermes-desktop-rune.git"
+    "url": "git+https://github.com/nggurbanov/herune.git"
   },
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/nggurbanov/hermes-desktop-rune/issues"
+    "url": "https://github.com/nggurbanov/herune/issues"
   },
-  "homepage": "https://github.com/nggurbanov/hermes-desktop-rune#readme",
+  "homepage": "https://github.com/nggurbanov/herune#readme",
   "devDependencies": {
     "@eslint/js": "9.39.5",
     "eslint": "10.12.0",

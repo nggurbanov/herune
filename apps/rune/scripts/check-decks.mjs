@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import {fileURLToPath} from 'node:url'
 const app=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..')
-const binary=process.argv[2]||path.join(app,'target/debug/hermes-rune')
+const binary=process.argv[2]||path.join(app,'target/debug/herune')
 const out=mkdtempSync(path.join(os.tmpdir(),'hermes-decks-native-'))
 const env={...process.env,HOME:out,USERPROFILE:out,XDG_STATE_HOME:path.join(out,'state'),HERMES_HOME:path.join(out,'agent'),HERMES_GATEWAY_TOKEN:''}
 const tap=(key,t)=>({type:'tap',key,t}),key=(name,t,mods={})=>({type:'key',name,code:name.length===1?'Key'+name.toUpperCase():name,t,ctrl:!!mods.cmd&&process.platform!=='darwin',...mods})

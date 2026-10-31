@@ -518,7 +518,9 @@ fn explicit_same_socket_root_evidence_keeps_unmapped_home_and_rejects_malformed_
         match expected {
             Err(()) => assert!(proof.is_err()),
             Ok(expected) => {
-                let proof = proof.unwrap();
+                let proof = proof
+                    .unwrap()
+                    .expect("The fixture serves native runtime authority");
                 assert_eq!(proof.profile.as_deref(), expected);
                 assert_eq!(
                     proof.profile_id,

@@ -22,6 +22,7 @@ pub struct SidebarSession {
     pub pinned: Option<bool>,
     pub unread: Option<bool>,
     pub archived: bool,
+    #[serde(deserialize_with = "sqlite_flag")]
     pub hidden: bool,
     pub is_internal_child: bool,
     pub message_count: u64,
@@ -42,6 +43,16 @@ pub struct SidebarSession {
     pub continuation_kind: Option<String>,
     pub scheduler_owned: Option<bool>,
     pub is_active: Option<bool>,
+}
+
+// Session list endpoints retain this SQLite bit while normalizing other flags.
+fn sqlite_flag<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    match Value::deserialize(deserializer)? {
+        Value::Bool(value) => Ok(value),
+        Value::Number(value) if value.as_u64() == Some(0) => Ok(false),
+        Value::Number(value) if value.as_u64() == Some(1) => Ok(true),
+        _ => Err(serde::de::Error::custom("Expected a boolean or SQLite bit")),
+    }
 }
 
 impl SidebarSession {
@@ -182,6 +193,21 @@ pub fn parse_sessions_owned(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn remote_dashboard_sidebar_reads_sqlite_hidden_flags() {
+        let rows = parse_sessions(
+            &json!({"sessions":[{"id":"visible","hidden":0},{"id":"private","hidden":1}]}),
+            "work",
+        )
+        .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, "visible");
+        assert_eq!(rows[0].profile(), "work");
+        assert!(
+            parse_sessions(&json!({"sessions":[{"id":"invalid","hidden":2}]}), "work").is_err()
+        );
+    }
+
     #[test]
     fn rows_keep_numeric_time_owner_lineage_and_pins_beyond_the_window() {
         let value = json!({"sessions":[{"id":"tip","profile":"research","last_active":1234.5,"_lineage_root_id":"root","pinned":true,"source":"telegram"},{"id":"hidden","hidden":true}]});

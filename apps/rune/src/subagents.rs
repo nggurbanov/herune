@@ -64,6 +64,7 @@ pub struct Subagents {
     rx: Option<Receiver<Reply>>,
     waker: Option<Waker>,
     next_poll: Option<Duration>,
+    theme_preset: String,
     pub error: Option<String>,
 }
 impl Subagents {
@@ -75,6 +76,15 @@ impl Subagents {
         self.tx = Some(tx);
         self.rx = Some(rx);
         self.waker = Some(waker);
+    }
+    pub fn set_theme_preset(&mut self, preset: &str) {
+        if self.theme_preset == preset {
+            return;
+        }
+        self.theme_preset = preset.to_owned();
+        for window in self.windows.values_mut() {
+            window.set_preset(preset);
+        }
     }
     pub fn rows(&self, scope: &DraftScope) -> &[ChildRow] {
         self.rosters
@@ -253,7 +263,8 @@ impl Subagents {
                 return Ok(());
             }
         }
-        let launch = process::Launch::new(connection, scope, &row, theme);
+        let mut launch = process::Launch::new(connection, scope, &row, theme);
+        launch.theme_preset = self.theme_preset.clone();
         self.windows
             .insert(key, process::NativeWindow::spawn(launch)?);
         Ok(())

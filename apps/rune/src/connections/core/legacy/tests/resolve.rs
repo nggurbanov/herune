@@ -26,6 +26,9 @@ impl Server {
         Self::with_access(true)
     }
     fn with_access(access: bool) -> Self {
+        Self::with_runtime_error(access, None)
+    }
+    fn with_runtime_error(access: bool, runtime_error: Option<i64>) -> Self {
         let epoch = Arc::new(std::sync::atomic::AtomicU64::new(7));
         let runtime_epoch = epoch.clone();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -91,6 +94,12 @@ impl Server {
                     };
                     let request: Value = serde_json::from_str(&message).unwrap();
                     observed.lock().unwrap().push(request.clone());
+                    if request["method"] == "runtime.describe" {
+                        if let Some(code) = runtime_error {
+                            ws.send(Message::Text(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":code,"message":"runtime unavailable"}}).to_string().into())).unwrap();
+                            continue;
+                        }
+                    }
                     let value = match request["method"].as_str().unwrap() {
                         "profiles.list" => {
                             json!({"profiles":[{"name":"backend-home","path":"/private/backend-home"},{"name":"declared-alias","path":"/private/declared-alias"}],"install_id":"private-install"})
@@ -98,6 +107,22 @@ impl Server {
                         "runtime.describe" => {
                             assert_eq!(request["params"], json!({}));
                             json!({"profile_id":"/private/backend-home","instance_id":"fixture-instance","authority_epoch":runtime_epoch.load(Ordering::Acquire)})
+                        }
+                        "session.list" => {
+                            assert_eq!(
+                                request["params"],
+                                json!({"profile":"backend-home","limit":200,"include_hidden":false})
+                            );
+                            json!({"sessions":[{"id":"legacy-stored","title":"Fixture"}]})
+                        }
+                        "session.create" => {
+                            assert_eq!(request["params"]["profile"], "backend-home");
+                            json!({"session_id":"legacy-live","stored_session_id":"legacy-stored","info":{"profile_name":"backend-home"},"messages":[]})
+                        }
+                        "prompt.submit" => {
+                            assert_eq!(request["params"]["profile"], "backend-home");
+                            assert_eq!(request["params"]["session_id"], "legacy-live");
+                            json!({"status":"running","session_id":"legacy-live"})
                         }
                         other => panic!("unexpected private method {other}"),
                     };
@@ -480,8 +505,8 @@ fn same_home_fresh_authority_gets_a_new_full_lease_while_durable_namespace_stays
         crate::client::connection_key(first.lease.connection()).unwrap(),
         crate::client::connection_key(second.lease.connection()).unwrap()
     );
-    assert_eq!(first.root_proof.authority_epoch, 7);
-    assert_eq!(second.root_proof.authority_epoch, 8);
+    assert_eq!(first.root_proof.as_ref().unwrap().authority_epoch, 7);
+    assert_eq!(second.root_proof.as_ref().unwrap().authority_epoch, 8);
     assert!(first.lease.is_valid());
     assert!(second.lease.is_valid());
     let mut stale = crate::gateway::Gateway::connect(first.lease.connection()).unwrap();
@@ -797,7 +822,10 @@ fn cold_registry_primary_is_resolved_and_proved_without_a_live_viewer() {
         resolved.lease.actual_saved_identity(),
         Some((row.id.as_str(), row.revision.as_str()))
     );
-    assert_eq!(resolved.root_proof.profile_id, "/private/backend-home");
+    assert_eq!(
+        resolved.root_proof.as_ref().unwrap().profile_id,
+        "/private/backend-home"
+    );
     assert!(matches!(
         resolved.connection.route_owner().unwrap().door(),
         RouteDoor::Legacy
@@ -1124,4 +1152,99 @@ fn generic_oauth_route_uses_its_keyring_record_for_ticket_and_same_socket_proof(
             .unwrap()
             .contains("private-refresh")
     );
+}
+
+#[test]
+fn remote_dashboard_without_native_authority_keeps_the_original_scoped_chat_protocol() {
+    for override_alias in [false, true] {
+        let fixture = Private::new();
+        let mut core = fixture.core();
+        let server = Server::with_runtime_error(true, Some(-32601));
+        let desktop = if override_alias {
+            "desktop-alias"
+        } else {
+            "backend-home"
+        };
+        let scope = if override_alias {
+            Scope::Profile(desktop.into())
+        } else {
+            Scope::Global
+        };
+        configure(
+            &mut core,
+            &server,
+            scope,
+            override_alias.then_some("backend-home"),
+        );
+        let alive = Arc::new(AtomicBool::new(true));
+        let resolved = core.resolve_legacy(request(desktop), &alive).unwrap();
+        let resolved = core.commit_legacy(resolved, None, &alive).unwrap();
+        assert!(
+            resolved.root_proof.is_none(),
+            "A remote dashboard must not invent native authority"
+        );
+        assert!(
+            matches!(resolved.connection.wire_policy().unwrap().selected().unwrap().target(), BackendTarget::Named(name) if name == "backend-home")
+        );
+        let mut inventory = crate::gateway::Gateway::connect(&resolved.connection).unwrap();
+        let sessions = inventory
+            .sessions_for(
+                &crate::gateway::prepared::ProfileProvenance::NativeSelf,
+                desktop,
+            )
+            .unwrap();
+        assert_eq!(sessions[0].id, "legacy-stored");
+        drop(inventory);
+        let mut chat = crate::gateway::conversation::SessionTransport::connect_native_self(
+            &resolved.connection,
+            desktop,
+        )
+        .unwrap();
+        assert!(!chat.canonical);
+        let snapshot = chat.create(json!({"source":"desktop"})).unwrap();
+        assert_eq!(snapshot.runtime, "legacy-live");
+        assert!(!snapshot.canonical);
+        let receipt = chat
+            .call(
+                "prompt.submit",
+                json!({"session_id":snapshot.runtime,"text":"fixture input"}),
+            )
+            .unwrap();
+        assert_eq!(receipt["status"], "running");
+        assert!(
+            server
+                .calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(
+                    |call| call["method"] == "session.create" || call["method"] == "prompt.submit"
+                )
+                .all(|call| call["params"]["profile"] == "backend-home")
+        );
+    }
+}
+
+#[test]
+fn remote_dashboard_compatibility_never_hides_refusals_or_guesses_a_profile() {
+    for (code, profile, global) in [
+        (-32001, Some("backend-home"), true),
+        (-32601, Some("missing"), false),
+        (-32601, None, false),
+    ] {
+        let fixture = Private::new();
+        let mut core = fixture.core();
+        let server = Server::with_runtime_error(true, Some(code));
+        let scope = if global {
+            Scope::Global
+        } else {
+            Scope::Profile("desktop-alias".into())
+        };
+        configure(&mut core, &server, scope, profile);
+        assert!(
+            core.resolve_legacy(request("desktop-alias"), &Arc::new(AtomicBool::new(true)))
+                .is_err()
+        );
+        assert!(!server.calls.lock().unwrap().iter().any(|call| call["method"] == "session.create" || call["method"] == "prompt.submit"));
+    }
 }

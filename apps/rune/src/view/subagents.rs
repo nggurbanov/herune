@@ -128,12 +128,15 @@ pub fn strip(state: &Viewer, kit: &Kit) -> El {
 }
 
 pub fn window(state: &WindowState, cx: &mut Cx<WindowState>) -> El {
-    let kit = rune_theme_opencode::kit(state.theme.unwrap_or(cx.system_dark()));
+    let dark =
+        super::theme::appearance(&state.theme_preset, state.theme.unwrap_or(cx.system_dark()));
+    let kit_owned = super::theme::kit(&state.theme_preset, dark);
+    let kit = &kit_owned;
     let stack = transcript::stack(state, kit);
     col()
         .key("subagent-window")
         .role("window")
-        .label("Hermes subagent spectator")
+        .label("Herune subagent spectator")
         .w_full()
         .h_full()
         .fill(kit.c.bg_deep)

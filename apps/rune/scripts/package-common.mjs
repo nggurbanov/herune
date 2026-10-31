@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
 export const id = 'io.github.nggurbanov.hermes-desktop-rune'
-export const product = 'Hermes Desktop Rune'
+export const product = 'Herune'
 export const xml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;')
 export function options(argv) {
   const result = {}

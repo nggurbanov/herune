@@ -387,20 +387,26 @@ impl Gateway {
         profile: &str,
     ) -> Result<Vec<Session>, String> {
         valid_scope(profile)?;
-        let params = self.rpc_params_for(
-            provenance,
-            json!({"scope": "stored", "limit": 200, "include_hidden": false}),
-        )?;
+        let (params, allow_unowned) = match &self.auth {
+            #[cfg(target_os = "linux")]
+            Auth::Native(_) => (
+                json!({"scope": "stored", "limit": 200, "include_hidden": false}),
+                false,
+            ),
+            // Standalone dashboards return scoped rows without repeating their owner.
+            _ => (json!({"limit": 200, "include_hidden": false}), true),
+        };
+        let params = self.rpc_params_for(provenance, params)?;
         let value = self.rpc("session.list", params)?;
         if matches!(provenance, prepared::ProfileProvenance::NativeSelf) {
-            self.validate_response_owner(provenance, &value, "profile", false)?;
+            self.validate_response_owner(provenance, &value, "profile", allow_unowned)?;
         }
         let rows = rows(&value, "sessions")?;
         let mut result = Vec::new();
         self.session_targets.clear();
         for row in rows {
             if matches!(provenance, prepared::ProfileProvenance::NativeSelf) {
-                self.validate_response_owner(provenance, row, "profile", false)?;
+                self.validate_response_owner(provenance, row, "profile", allow_unowned)?;
             }
             let id = row
                 .get("session_id")
@@ -782,6 +788,17 @@ impl Gateway {
         params: Value,
         deadline: Instant,
     ) -> Result<Value, String> {
+        self.rpc_optional_method_until(method, params, deadline)?
+            .ok_or_else(|| format!("Gateway {method} read refused (RPC -32601)"))
+    }
+
+    /// Only a JSON-RPC method-not-found acknowledgement permits compatibility.
+    fn rpc_optional_method_until(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Option<Value>, String> {
         if !matches!(
             method,
             "profiles.list" | "session.list" | "model.options" | "runtime.describe"
@@ -824,11 +841,15 @@ impl Gateway {
                     }
                     if let Some(error) = value.get("error") {
                         let code = error.get("code").and_then(Value::as_i64).unwrap_or(-1);
+                        if code == -32601 {
+                            return Ok(None);
+                        }
                         return Err(format!("Gateway {method} read refused (RPC {code})"));
                     }
                     return value
                         .get("result")
                         .cloned()
+                        .map(Some)
                         .ok_or_else(|| "Gateway response has no result".into());
                 }
                 Message::Close(_) => return Err("Gateway closed the connection".into()),

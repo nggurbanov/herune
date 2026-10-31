@@ -41,6 +41,24 @@ Make Primary changes registry startup policy without rewriting an explicit
 legacy global remote. Legacy global/profile settings therefore need independent
 transport snapshots, rather than pointers to editable registry rows.
 
+## Remote session protocol compatibility
+
+Legacy resume replies identify durable history with `session_key` (or `resumed`); the runtime `session_id` remains a separate live handle. Sidebar rows retain the database `hidden` bit as either a boolean or `0/1`.
+
+Session inventory uses the standalone dashboard parameter contract remotely. Only a local native attachment requests `scope: stored`; standalone dashboards already list stored sessions and reject this canonical-only parameter. Their list envelope and rows may omit repeated profile names; explicit conflicting names are still rejected against the captured request scope.
+
+Like the retained Electron client, remote URL dashboards use their existing
+session protocol. `runtime.describe` is native-authority evidence, not a required
+remote-dashboard API. A JSON-RPC `-32601` for that probe permits a remote URL
+source to use its explicitly selected or routing-declared named backend profile,
+provided exactly one row in the authenticated profile roster matches it. No
+native profile home, runtime instance or authority epoch is fabricated.
+
+An unscoped root route still requires real native authority. Local native
+attachment cannot take this compatibility path. Authentication refusals,
+transport failures and malformed successful runtime replies are errors, not
+signals to downgrade. Native root ownership and reconnect fencing remain intact.
+
 ## Identity, aliases and credentials
 
 Freeze complete route identity before dialing. Profile overrides can claim a

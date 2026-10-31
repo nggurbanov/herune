@@ -434,7 +434,7 @@ pub(in crate::connections) struct AuthBundle {
 impl Store {
     pub(in crate::connections) fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
-            return Err("Legacy settings require a newer Hermes app".into());
+            return Err("Legacy settings require a newer Herune app".into());
         }
         if let Some(slot) = &self.global {
             validate_stamp(&slot.stamp)?;

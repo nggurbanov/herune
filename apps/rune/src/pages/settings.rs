@@ -744,7 +744,7 @@ impl Settings {
         result.push(("web-access".into(), "Web access".into()));
         result.push(("billing".into(), "Billing & subscription".into()));
         result.push(("shortcuts".into(), "Keyboard shortcuts".into()));
-        result.push(("about".into(), "About Hermes".into()));
+        result.push(("about".into(), "About Herune".into()));
         result
     }
     pub fn fixture(&mut self) {

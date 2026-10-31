@@ -204,9 +204,9 @@ fn constant_equal(a: &[u8], b: &[u8]) -> bool {
 }
 fn respond(stream: &mut TcpStream, accepted: bool) {
     let body = if accepted {
-        "<!doctype html><meta charset=utf-8><title>Hermes authorization</title><h1>Authorization received</h1><p>Return to Hermes to finish connecting.</p>"
+        "<!doctype html><meta charset=utf-8><title>Herune authorization</title><h1>Authorization received</h1><p>Return to Herune to finish connecting.</p>"
     } else {
-        "<!doctype html><meta charset=utf-8><title>Hermes authorization</title><h1>Callback not accepted</h1><p>Return to Hermes and complete the active authorization flow.</p>"
+        "<!doctype html><meta charset=utf-8><title>Herune authorization</title><h1>Callback not accepted</h1><p>Return to Herune and complete the active authorization flow.</p>"
     };
     let status = if accepted {
         "200 OK"

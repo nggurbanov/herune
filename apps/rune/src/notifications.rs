@@ -324,7 +324,7 @@ impl Notifications {
                 kind: Kind::Plugin,
                 scope,
                 runtime: String::new(),
-                title: "Hermes notifications".into(),
+                title: "Herune notifications".into(),
                 body: "Native notifications are working. Click to return to Hermes.".into(),
                 global: true,
                 tag: Some("notification-test".into()),

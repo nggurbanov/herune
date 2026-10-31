@@ -1,4 +1,4 @@
-# Hermes Desktop Rune development
+# Herune development
 
 This repository owns a standalone desktop client. It does not contain or maintain
 Hermes agent execution, the Python package manager, messaging gateway, CLI, TUI,

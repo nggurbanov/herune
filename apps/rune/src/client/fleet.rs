@@ -46,7 +46,7 @@ impl Document {
     fn validate(&self) -> Result<(), String> {
         if self.version != 1 {
             return Err(
-                "Fleet preferences require a newer Hermes app; their file was retained".into(),
+                "Fleet preferences require a newer Herune app; their file was retained".into(),
             );
         }
         if self.profile_order.len() > 4096

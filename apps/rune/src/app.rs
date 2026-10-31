@@ -182,6 +182,7 @@ pub struct Viewer {
     pub sidebar: PaneState,
     pub inspector: PaneState,
     pub theme: Option<bool>,
+    pub theme_preset: String,
     pub layout: crate::layout::Node,
     pub decks: crate::decks::Decks,
     pub layout_name: TextEdit,
@@ -361,6 +362,7 @@ impl Viewer {
             sidebar: PaneState::new(237.0).range(190.0, 360.0),
             inspector: PaneState::new(300.0).range(240.0, 520.0).collapsed(),
             theme: None,
+            theme_preset: "default".into(),
             layout: Default::default(),
             decks: Default::default(),
             layout_name: TextEdit::default(),
@@ -454,6 +456,7 @@ impl Viewer {
         self.show_profile_rail = prefs.show_profile_rail;
         self.hidden_status_items = prefs.hidden_status_items.clone();
         self.theme = prefs.theme;
+        self.theme_preset = prefs.theme_preset.clone();
         self.layout = prefs
             .layout
             .clone()
@@ -644,7 +647,10 @@ impl Viewer {
         true
     }
     pub fn toggle_theme(&mut self, system_dark: bool) {
-        self.theme = Some(!self.theme.unwrap_or(system_dark));
+        let dark =
+            crate::view::theme::appearance(&self.theme_preset, self.theme.unwrap_or(system_dark));
+        self.theme_preset = "default".into();
+        self.theme = Some(!dark);
     }
 
     pub fn composer_scope(&self) -> DraftScope {
@@ -1620,6 +1626,7 @@ pub fn poll(s: &mut Viewer, now: f64, tx: &mut Tx) -> bool {
     let scope = s.composer_scope();
     let chat_visible = s.route == crate::pages::Route::Chat
         && s.layout.shows("workspace", &|pane| s.pane_visible(pane));
+    s.subagents.set_theme_preset(&s.theme_preset);
     let subagents_changed = if !s.fixture && chat_visible {
         if let Some(connection) = s.connection.as_ref() {
             s.subagents.observe(
@@ -2010,6 +2017,7 @@ impl Viewer {
             hidden_status_items: self.hidden_status_items.clone(),
             speak_replies: self.speak_replies,
             theme: self.theme,
+            theme_preset: self.theme_preset.clone(),
             simple_mode: self.simple_mode,
             sidebar_width: self.sidebar.width(),
             sidebar_open: self.sidebar.is_open(),

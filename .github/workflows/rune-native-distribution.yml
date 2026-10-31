@@ -58,10 +58,10 @@ jobs:
           cargo +1.95.0 -V > rune-evidence/cargo.txt
           git ls-files -s apps/rune > rune-evidence/local-sources-git-index.txt
           cp apps/rune/THIRD_PARTY_NOTICES.md LICENSE rune-evidence/
-          if [ "$RUNNER_OS" = Linux ]; then uname -a > rune-evidence/host.txt; ldd apps/rune/target/${{ matrix.target }}/release/hermes-rune > rune-evidence/linkage.txt; fi
-          if [ "$RUNNER_OS" = macOS ]; then sw_vers > rune-evidence/host.txt; xcodebuild -version >> rune-evidence/host.txt; otool -L apps/rune/target/${{ matrix.target }}/release/hermes-rune > rune-evidence/linkage.txt; fi
+          if [ "$RUNNER_OS" = Linux ]; then uname -a > rune-evidence/host.txt; ldd apps/rune/target/${{ matrix.target }}/release/herune > rune-evidence/linkage.txt; fi
+          if [ "$RUNNER_OS" = macOS ]; then sw_vers > rune-evidence/host.txt; xcodebuild -version >> rune-evidence/host.txt; otool -L apps/rune/target/${{ matrix.target }}/release/herune > rune-evidence/linkage.txt; fi
           if [ "$RUNNER_OS" = Windows ]; then cmd.exe /c ver > rune-evidence/host.txt; fi
-          cp apps/rune/target/${{ matrix.target }}/release/hermes-rune* rune-evidence/
+          cp apps/rune/target/${{ matrix.target }}/release/herune* rune-evidence/
           node apps/rune/scripts/package-hashes.mjs rune-evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

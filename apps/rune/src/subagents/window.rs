@@ -7,6 +7,7 @@ pub(crate) struct WindowState {
     pub profile: String,
     pub child: String,
     pub theme: Option<bool>,
+    pub theme_preset: String,
     pub projection: worker::Projection,
     pub chat: crate::chat::Chat,
     pub audio: crate::audio::Audio,
@@ -29,6 +30,7 @@ impl WindowState {
             profile: launch.profile,
             child: launch.child,
             theme: launch.theme,
+            theme_preset: launch.theme_preset,
             projection: worker::Projection::default(),
             chat: crate::chat::Chat::new(),
             audio: crate::audio::Audio::new(),
@@ -236,7 +238,7 @@ pub fn run_if_window_mode() -> bool {
         on_key: Some(key),
         min_size: Some((380.0, 400.0)),
         ..AppSpec::new(
-            "Hermes · Subagent",
+            "Herune · Subagent",
             (560.0, 800.0),
             default_state,
             crate::view::subagents::window,
@@ -265,6 +267,13 @@ pub fn run_if_window_mode() -> bool {
                             let parts:Vec<_>=crate::chat::projection::project(&state.projection.messages).into_iter().flat_map(|message|message.parts).collect();
                             process::report(serde_json::json!({"type":"inspection","images_ready":state.ready_images,"image_parts":parts.iter().filter(|part|matches!(part,crate::chat::projection::Part::Image{..})).count(),"file_parts":parts.iter().filter(|part|matches!(part,crate::chat::projection::Part::File{..})).count(),"tool_parts":parts.iter().filter(|part|matches!(part,crate::chat::projection::Part::Tool{..})).count()+state.projection.activities.len(),"media_error":state.chat.media.values().any(|media|media.error.is_some()),"expanded_tools":state.chat.views.get(&state.owner()).map(|view|view.expanded.iter().filter(|key|key.starts_with("live-tool-")).count()).unwrap_or(0)}));
                         });
+                        }
+                        Some("theme-preset") => {
+                            let preset = value["preset"].as_str().unwrap_or("default").to_owned();
+                            handle.update(move |state, tx| {
+                                state.theme_preset = preset;
+                                tx.instant();
+                            });
                         }
                         Some("theme") => {
                             let dark = value.get("dark").and_then(Value::as_bool);

@@ -1,94 +1,76 @@
-# Hermes Desktop Rune
+# Herune
 
-A standalone desktop client for existing Hermes agents, extracted from
-[NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
+<p align="center">
+  <img src="apps/rune/assets/branding/logo.png" alt="Herune — cat with headphones" width="240" />
+</p>
 
-The standalone Electron interface is the behavioral baseline. The native Rune
-port preserves its panel placement and logic while reusing the OpenCode Rune
-visual system. A later phase will redesign the conversation workflow.
+**A native desktop client for Hermes, built with Rune.**
 
-The first native increment is a read-only gateway viewer in
-[apps/rune](apps/rune/README.md). Run it with `npm run dev:rune`.
+Herune connects to independently managed [Hermes agents](https://github.com/NousResearch/hermes-agent)
+on your machine or a remote server. It does not bundle an agent or take over its
+lifecycle. Closing Herune leaves your agent running.
 
-## Development
+The active client is written in Rust with Rune. It brings conversations and
+streaming, bot/profile navigation, settings, terminal and file views into a native
+window, with System / Light / Dark appearance and color presets.
 
-Use Node 26+ and npm 11.17+ (npm 12.0.2 is the current build toolchain).
+**Development alpha.** Full functional and cross-platform parity is still in
+progress. See [the native client guide](apps/rune/README.md) and
+[the parity tracker](apps/rune/docs/functional-parity.md) for capabilities,
+verification boundaries and remaining work.
+
+## Build and run
+
+Rust 1.95+ and the platform's native prerequisites are required. The
+[platform setup guide](apps/rune/README.md#build-and-run) lists them.
 
 ```sh
-npm ci
-npm run dev
-npm run build
-npm run typecheck
-npm test
+npm run dev:rune
+npm run dev:rune -- --gateway https://your-existing-gateway.example
+npm run build:rune
+npm run test:rune
 ```
 
-Only `apps/desktop` and `apps/shared` are npm workspaces. An application build
-needs no Python agent checkout or agent dependency environment. Native helpers
-still require the host platform toolchain; on Linux install `libx11-dev` and
-`libxi-dev` for the modifier-key helper.
+These native commands do not need a Python agent checkout or an npm dependency
+installation. Rune and other native dependencies are pinned in the Cargo lockfile.
 
-## Connect an existing Hermes
+## Connect your agent
 
-The client discovers separately installed local Hermes launchers and can connect
-to remote gateways by URL or SSH. It does not install or bundle an agent. A
-missing local installation opens the existing connection setup experience.
+Use Settings → Connections to select a local agent, remote gateway or SSH
+connection. For gateways supporting Nous sign-in, choose OAuth and finish the
+browser flow. Saved credentials stay in the OS credential store.
 
-Existing explicit development selectors remain supported:
-`HERMES_DESKTOP_HERMES` for an external launcher, or
-`HERMES_DESKTOP_HERMES_ROOT` plus `HERMES_DESKTOP_PYTHON` for an external
-source installation and its prepared interpreter. The desktop checkout cannot
-be selected as its own agent runtime.
-
-Hermes owns agent execution, profiles, sessions, memory, and tools. Closing this
-client disconnects its viewer without stopping the canonical local gateway.
-SSH connections retain the existing dedicated-server ownership behavior.
-See [the runtime contract](apps/desktop/docs/runtime-compatibility.md) for
-protocol requirements, state ownership and verification limits.
+Herune uses existing Hermes APIs for profiles, conversations and tools. It keeps
+agent configuration separate from client preferences. Direct remote OAuth chat
+and history restoration have been verified in the installed macOS build.
 
 ## Packaging
 
-```sh
-npm run pack                    # unpacked application for this host
-npm run dist                    # host installer/archive
-```
+The macOS application is **Herune.app**. Native packaging recipes for macOS,
+Linux and Windows are in [apps/rune/packaging](apps/rune/packaging/README.md).
+Signing and installed-platform acceptance remain separate from compilation.
 
-The app uses its own OS identity, window/connection state and `hermes-rune://`
-protocol. It does not replace the official Hermes app or register the official
-`hermes://` protocol. Updates are currently manual through this repository's
-releases; the desktop never updates or uninstalls the connected agent.
+The original bundle ID, client data directory, Keychain service and
+`hermes-rune://` compatibility scheme are retained so existing installs keep
+their settings and saved credentials. The product artwork and icon variants
+live in [apps/rune/assets/branding](apps/rune/assets/branding).
 
-macOS defaults to ZIP distribution. Optional DMG packaging requires an explicitly
-prepared dmgbuild tool tree; it does not provision the Hermes Python environment.
-Windows and macOS packaging still need verification on their respective hosts.
+## Source and attribution
 
-## Extraction status
+Herune is independently maintained and hosted. Its Git history retains its
+origin in [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent).
+The original GitHub fork is preserved separately as
+[hermes-desktop-rune-archive](https://github.com/nggurbanov/hermes-desktop-rune-archive).
 
-The upstream reference is pinned in [desktop-baseline.json](desktop-baseline.json).
-Generated gateway TypeScript/OpenRPC and slash-command fallback definitions are
-retained client compatibility snapshots; ordinary builds never regenerate them
-from Python server modules.
+The retained Electron desktop in `apps/desktop` is the behavioral and spatial
+baseline for the native port. It is kept for compatibility work; it is not the
+primary Herune application. Its separate Node/Electron build instructions are in
+[apps/desktop/BUILDING.md](apps/desktop/BUILDING.md).
 
-The repository contains only the desktop client, its shared gateway client,
-JavaScript build tools and desktop documentation/tests. Python/server sources,
-the upstream installer, TUI, dashboard, website and legacy release CI are removed.
+The upstream snapshot and client protocol provenance are recorded in
+[desktop-baseline.json](desktop-baseline.json). Hermes retains ownership of agent
+execution, profiles, sessions, memory and tools.
 
-Preferences, desktop runtime plugins and client logs live under this app's own
-Electron userData directory. Locally installed unified agent packages may supply
-desktop plugin halves through read-only source scans; generated copies belong to
-the client. Starting the client never moves plugins out of an agent home.
-
-The default Vitest lane is client-only. Optional Python/server compatibility
-checks use `npm run test:external` and a selected external installation. See
-[the E2E guide](apps/desktop/e2e/README.md). The old bundled-agent installation and
-self-update tests were removed with those features; standalone startup, updater
-policy, connection and packaging contracts remain covered.
-
-Local attachment to Chikibryak (Hermes 0.22.5) was verified on Linux. URL/SSH
-contract tests use controlled fixtures; live remote-host acceptance remains
-unverified. The user waived live full-chat-cycle acceptance for extraction.
-Clean-source installation, typechecks, all 16,391 client tests (30 platform
-skips), Linux unpacked packaging and actual no-agent startup passed on
-2026-10-29. Windows and macOS packaging remain unverified. The first read-only Rune increment is implemented and verified on Linux; full
-parity has not been established.
-
-Upstream MIT copyright and license notices are preserved in [LICENSE](LICENSE).
+Upstream copyright and MIT license notices are preserved in [LICENSE](LICENSE).
+Rune/OpenCode, T3 Code theme provenance and other dependency notices are in
+[THIRD_PARTY_NOTICES.md](apps/rune/THIRD_PARTY_NOTICES.md).

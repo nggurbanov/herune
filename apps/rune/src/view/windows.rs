@@ -23,7 +23,7 @@ pub fn menu(s: &Viewer, k: &Kit, layer: &mut Vec<El>) {
             s.open_route(crate::pages::Route::Settings);
         }))
         .item(MenuItem::new("Close window").on_select(|s: &mut Viewer| s.request_window_close()))
-        .item(MenuItem::new("Quit Hermes").on_select(|s: &mut Viewer| s.request_application_quit()))
+        .item(MenuItem::new("Quit Herune").on_select(|s: &mut Viewer| s.request_application_quit()))
         .build(k, layer);
     layer.push(menu);
 }

@@ -89,7 +89,9 @@ impl Core {
                 let backend_proof = gateway.backend_profiles()?;
                 let root_proof = gateway.backend_root_proof()?;
                 require_live(alive)?;
-                request.context.primary_profile = root_proof.profile.clone();
+                if let Some(proof) = &root_proof {
+                    request.context.primary_profile = proof.profile.clone();
+                }
                 request.context.primary_remote_active = true;
                 request.primary = Some(crate::connections::legacy::CapturedPrimary {
                     connection,

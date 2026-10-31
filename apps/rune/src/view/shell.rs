@@ -31,8 +31,9 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, k: &Kit) -
                 .gap(4.0)
                 .center_y()
                 .child(sidebar_toggle(k))
+                .child(super::branding::logo(18.0))
                 .child(
-                    text("Hermes")
+                    text("Herune")
                         .font(k.ty.ui_medium)
                         .color(k.c.text_muted)
                         .on_secondary_press(|s: &mut Viewer, point, _| s.open_window_menu(point)),
@@ -55,17 +56,22 @@ pub fn layout(s: &Viewer, cx: &mut Cx<Viewer>, main: El, sidebar: El, k: &Kit) -
                     Button::new(if s.simple_mode { "Simple" } else { "Advanced" })
                         .variant(ButtonVariant::GhostMuted)
                         .control_size(ControlSize::Small)
-                        .help("Switch Hermes interface mode")
+                        .help("Switch Herune interface mode")
                         .on_press(|s: &mut Viewer| s.set_simple_mode(!s.simple_mode))
                         .build(k)
                         .key("interface-mode"),
                 )
                 .child(
-                    Button::new(if s.theme.unwrap_or(cx.system_dark()) {
-                        "Light"
-                    } else {
-                        "Dark"
-                    })
+                    Button::new(
+                        if super::theme::appearance(
+                            &s.theme_preset,
+                            s.theme.unwrap_or(cx.system_dark()),
+                        ) {
+                            "Light"
+                        } else {
+                            "Dark"
+                        },
+                    )
                     .variant(ButtonVariant::GhostMuted)
                     .control_size(ControlSize::Small)
                     .on_press({
@@ -225,7 +231,7 @@ fn workspace_tabs(s: &Viewer, k: &Kit) -> El {
         );
     }
     if s.tabs.is_empty() {
-        return tabs.child(text("Hermes").font(k.ty.ui_medium).color(k.c.text_muted));
+        return tabs.child(text("Herune").font(k.ty.ui_medium).color(k.c.text_muted));
     }
     for (index, tab) in s.tabs.iter().enumerate() {
         let activate_owner = crate::composer::DraftScope {
@@ -290,7 +296,7 @@ pub fn sessions_nav(s: &Viewer, k: &Kit) -> El {
     let mut nav = col()
         .key("sessions-navigation")
         .role("navigation")
-        .label("Hermes navigation")
+        .label("Herune navigation")
         .w_full()
         .gap(2.0);
     for (key, label, glyph, advanced) in [
@@ -483,7 +489,7 @@ pub fn bots_sidebar(s: &Viewer, p: &Pal, k: &Kit) -> El {
 pub fn conversation_context(s: &Viewer, p: &Pal, k: &Kit) -> El {
     let bot = s.bot_is_active(&s.profile);
     let profile = s.profiles.iter().find(|p| p.name == s.profile);
-    let label = profile.map(|p| p.label.as_str()).unwrap_or("Hermes");
+    let label = profile.map(|p| p.label.as_str()).unwrap_or("Herune");
     let activity = if s.chat_running() {
         "Working"
     } else if s.loading {

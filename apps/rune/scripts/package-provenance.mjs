@@ -45,7 +45,7 @@ export function packageFrozen(o) {
     run('tar', ['-xf', archive, '-C', source, '--no-same-owner'])
     appDir({...o, binary, sourceRoot: source})
     const doc = join(resolve(o.out), 'usr/share/doc/hermes-desktop-rune')
-    verify(join(resolve(o.out), 'usr/bin/hermes-desktop-rune'), manifest.candidate_sha256, 'packaged binary')
+    verify(join(resolve(o.out), 'usr/bin/herune'), manifest.candidate_sha256, 'packaged binary')
     copyFileSync(manifestCopy, join(doc, 'source-manifest.json'))
     copyFileSync(list, join(doc, 'source-files.list0'))
     writeFileSync(join(doc, 'PROVENANCE.json'), JSON.stringify({schema: 1, source_manifest_sha256: expectedManifest, binary_sha256: manifest.candidate_sha256, source_archive_sha256: manifest.source_archive_sha256, source_file_list_sha256: listSha, git_head: manifest.git_head}, null, 2) + '\n')

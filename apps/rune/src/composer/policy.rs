@@ -116,16 +116,23 @@ impl Composer {
             draft.model = model;
         }
         if !draft.reasoning_changed {
-            let value = policy.next_reasoning().map(str::to_owned);
+            let value = policy
+                .next_reasoning()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned);
             changed |= draft.reasoning != value;
             draft.reasoning = value;
         }
         if !draft.service_tier_changed {
-            let value = policy.next_service_tier().map(str::to_owned).or_else(|| {
-                policy
-                    .fast
-                    .map(|fast| if fast { "priority" } else { "normal" }.into())
-            });
+            let value = policy
+                .next_service_tier()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    policy
+                        .fast
+                        .map(|fast| if fast { "priority" } else { "normal" }.into())
+                });
             changed |= draft.service_tier != value;
             draft.service_tier = value;
         }

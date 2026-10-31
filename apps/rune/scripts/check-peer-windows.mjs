@@ -12,7 +12,7 @@ import {WebSocketServer} from 'ws'
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2), option = name => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : null }
-const binary = path.resolve(option('--binary') ?? path.join(app, 'target/debug/hermes-rune'))
+const binary = path.resolve(option('--binary') ?? path.join(app, 'target/debug/herune'))
 const out = path.resolve(option('--out') ?? fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-peer-native-evidence-')))
 fs.mkdirSync(out, {recursive: true})
 assert.equal(fs.readdirSync(out).length, 0, 'Native acceptance requires a fresh evidence directory')

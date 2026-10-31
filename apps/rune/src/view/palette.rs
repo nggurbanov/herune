@@ -84,3 +84,21 @@ pub fn pal(dark: bool) -> &'static Pal {
         LIGHT.get_or_init(|| build(false))
     }
 }
+
+/// Map shared component tokens to the transcript and sidebar roles.
+pub fn from_kit(base: &Pal, k: &rune_kit::Kit) -> Pal {
+    let mut p = *base;
+    p.dark = k.dark;
+    p.bg_base = k.c.bg_base;
+    p.layer1 = k.c.layer_01;
+    p.layer2 = k.c.layer_02;
+    p.layer3 = k.c.layer_03;
+    p.text = k.c.text_base;
+    p.muted = k.c.text_muted;
+    p.faint = k.c.text_faint;
+    p.accent = k.c.text_accent;
+    p.border = k.c.border_base;
+    p.border_muted = k.c.border_muted;
+    p.inline_code_bg = k.c.layer_02;
+    p
+}

@@ -1,5 +1,5 @@
 [package]
-name = "hermes-rune"
+name = "herune"
 version = "0.1.0-alpha.0"
 edition = "2024"
 rust-version = "1.95"
@@ -42,12 +42,14 @@ url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
 flate2 = "1"
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["net", "process", "fs"] }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "=5.19.0", default-features = false, features = ["tokio"] }
 futures-util = { version = ">=0.3.32,<0.4", default-features = false, features = ["std", "async-await"] }
 webrtc-audio-processing = { version = "2.1", default-features = false, features = ["bundled"] }
 gtk = "0.18"
-rustix = { version = "1", features = ["net", "process", "fs"] }
 webkit2gtk = { version = "2", features = ["v2_40"] }
 
 [profile.dev.package."*"]

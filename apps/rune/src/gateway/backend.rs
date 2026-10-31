@@ -1,7 +1,7 @@
 //! Explicit same-socket launch-home evidence, separate from UI profile labels.
 use super::*;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct BackendRootProof {
     /// A name exists only when exactly one raw roster path identifies this home.
     pub profile: Option<String>,
@@ -25,13 +25,26 @@ impl BackendRootProof {
 impl Gateway {
     /// Called only by an explicit source resolution. Passive inventory never
     /// asks for runtime.describe, which may maintain backend configuration.
-    pub(crate) fn backend_root_proof(&mut self) -> Result<BackendRootProof, String> {
+    /// Remote dashboards use named, roster-verified profiles, as Electron does.
+    /// A local native owner must always prove its actual runtime authority.
+    pub(crate) fn backend_root_proof(&mut self) -> Result<Option<BackendRootProof>, String> {
         let homes = self
             .raw_backend_homes
             .as_ref()
             .ok_or("Read the backend's raw profile inventory before requesting root evidence")?
             .clone();
-        let value = self.rpc_until("runtime.describe", json!({}), Instant::now() + TIMEOUT)?;
+        let Some(value) = self.rpc_optional_method_until(
+            "runtime.describe",
+            json!({}),
+            Instant::now() + TIMEOUT,
+        )?
+        else {
+            #[cfg(target_os = "linux")]
+            if matches!(self.auth, Auth::Native(_)) {
+                return Err("The local gateway did not provide native runtime authority".into());
+            }
+            return Ok(None);
+        };
         let profile_id = required_str(&value, "profile_id")?;
         if !absolute_remote_home(profile_id) {
             return Err("The backend did not prove an absolute running profile home".into());
@@ -47,12 +60,12 @@ impl Gateway {
             (Some((name, _)), None) => Some(name.clone()),
             _ => None,
         };
-        Ok(BackendRootProof {
+        Ok(Some(BackendRootProof {
             profile,
             profile_id: profile_id.into(),
             instance_id: instance_id.into(),
             authority_epoch,
-        })
+        }))
     }
 }
 

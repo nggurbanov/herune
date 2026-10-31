@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url'
 import assert from 'node:assert/strict'
 const rune=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..')
 const args=process.argv.slice(2), at=args.indexOf('--binary')
-const binary=at>=0?args[at+1]:path.join(rune,'target/debug/hermes-rune')
+const binary=at>=0?args[at+1]:path.join(rune,'target/debug/herune')
 if(!process.env.DISPLAY)throw new Error('Use an isolated native test display (xvfb-run -a)')
 const assets=JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(rune,'assets/plugin-host/assets.json.gz'))))
 const source=`import * as React from 'react';

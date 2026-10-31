@@ -118,6 +118,8 @@ pub(super) struct Launch {
     pub goal: String,
     pub theme: Option<bool>,
     #[serde(default)]
+    pub theme_preset: String,
+    #[serde(default)]
     pub fixture: bool,
 }
 impl Launch {
@@ -144,6 +146,7 @@ impl Launch {
             title: format!("Subagent: {}", row.task_index + 1),
             goal: row.goal.clone(),
             theme,
+            theme_preset: "default".into(),
             fixture: false,
         }
     }
@@ -177,6 +180,7 @@ impl Launch {
             title: "Subagent: 1".into(),
             goal: "Compare the eight proposals and verify the source images.".into(),
             theme: None,
+            theme_preset: "default".into(),
             fixture: true,
         }
     }
@@ -185,6 +189,7 @@ pub(super) struct NativeWindow {
     child: Child,
     input: ChildStdin,
     theme: Option<bool>,
+    theme_preset: String,
     closed: bool,
     ready: bool,
     replies: Receiver<Value>,
@@ -229,6 +234,7 @@ impl NativeWindow {
             child,
             input,
             theme: launch.theme,
+            theme_preset: launch.theme_preset.clone(),
             closed: false,
             ready: false,
             replies,
@@ -242,6 +248,15 @@ impl NativeWindow {
     }
     pub fn focus(&mut self) -> Result<(), String> {
         send(&mut self.input, &json!({"type":"focus"}))
+    }
+    pub fn set_preset(&mut self, preset: &str) {
+        if self.theme_preset != preset {
+            self.theme_preset = preset.to_owned();
+            let _ = send(
+                &mut self.input,
+                &json!({"type":"theme-preset", "preset":preset}),
+            );
+        }
     }
     pub fn theme(&mut self, theme: Option<bool>) {
         if theme != self.theme {

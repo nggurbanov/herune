@@ -85,7 +85,11 @@ fn remote_reads_preserve_scope_identity_and_ignore_unrelated_rpc_frames() {
             json!({"profiles":[{"name":"work","display_name":"Work agent"}]}),
         );
         let sessions = request(&mut ws, "session.list", "work");
-        assert_eq!(sessions["params"]["scope"], "stored");
+        assert_eq!(
+            sessions["params"],
+            json!({"profile":"work","limit":200,"include_hidden":false}),
+            "Remote dashboards accept the legacy session-list contract"
+        );
         assert!(
             (1..=200).contains(&sessions["params"]["limit"].as_u64().unwrap()),
             "Canonical stored list accepts at most 200 recent sessions"
