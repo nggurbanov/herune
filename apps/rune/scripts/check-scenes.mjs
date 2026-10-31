@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const binary = process.argv[2] || path.join(app, 'target/debug', process.platform === 'win32' ? 'hermes-rune.exe' : 'hermes-rune')
+const binary = process.argv[2] || path.join(app, 'target/debug', process.platform === 'win32' ? 'herune.exe' : 'herune')
 const out = mkdtempSync(path.join(os.tmpdir(), 'hermes-rune-scenes-'))
 const env = { ...process.env, HOME: out, USERPROFILE: out, HERMES_HOME: path.join(out, 'agent'), HERMES_GATEWAY_TOKEN: '' }
 let passed = false
