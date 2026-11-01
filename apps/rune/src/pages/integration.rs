@@ -732,3 +732,7 @@ mod readiness_tests {
         assert!(wire.calls().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "capabilities/mounted_tests.rs"]
+mod capabilities_mounted_tests;

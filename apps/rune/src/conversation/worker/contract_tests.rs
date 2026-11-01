@@ -1262,3 +1262,6 @@ fn live_session_info_updates_clean_fields_without_inventing_a_missing_provider()
     assert!(composer.draft(&scope).unwrap().approval_changed);
     server.join().unwrap();
 }
+
+#[path = "plugin_chat_tests.rs"]
+mod plugin_chat_tests;

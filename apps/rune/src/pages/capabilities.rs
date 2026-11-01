@@ -572,7 +572,10 @@ impl Capabilities {
                     .filter(plugin_visible)
                     .collect();
                 if let Some(Selection::Plugin(key)) = self.selection.clone() {
-                    return self.select(Selection::Plugin(key));
+                    if self.plugins.iter().any(|row| string(row, "key") == key) {
+                        return self.select(Selection::Plugin(key));
+                    }
+                    self.close_detail();
                 }
             }
             "plugin-inspect" => self.inspection = value,
