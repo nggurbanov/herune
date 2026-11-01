@@ -1,0 +1,21 @@
+{
+  "name": "@herune/builtin-bots",
+  "version": "0.1.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/plugin.tsx"
+  },
+  "peerDependencies": {
+    "@hermes/plugin-sdk": "*",
+    "react": ">=19 <20",
+    "nanostores": ">=0.11 <2"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.integration.config.ts"
+  },
+  "dependencies": {
+    "@novnc/novnc": ">=1.7.0 <2"
+  }
+}

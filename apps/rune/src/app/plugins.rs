@@ -86,6 +86,16 @@ impl Viewer {
                 }
                 continue;
             }
+            if action.kind == "workspace-scope" {
+                if let Some(token) = self.plugin_hosts.window_token() {
+                    let result = self
+                        .plugin_hosts
+                        .set_plugin_workspace_scope(&token, &action.payload);
+                    self.plugin_hosts
+                        .reply_owned(&token, &action.id, result.map(|_| json!(true)));
+                }
+                continue;
+            }
             if matches!(
                 action.kind.as_str(),
                 "open-session" | "new-chat" | "ensure-agent"
@@ -344,10 +354,20 @@ pub(super) struct PluginNavigation {
     deadline: std::time::Instant,
 }
 impl Viewer {
-    fn plugin_navigate(&mut self, action: crate::plugin_host::HostAction) {
+    fn plugin_navigate(&mut self, mut action: crate::plugin_host::HostAction) {
         let Some(token) = self.plugin_hosts.window_token() else {
             return;
         };
+        if action.kind == "new-chat" {
+            if let Err(error) = self
+                .plugin_hosts
+                .apply_plugin_workspace_to_new_chat(&token, &mut action.payload)
+            {
+                self.plugin_hosts
+                    .reply_owned(&token, &action.id, Err(error));
+                return;
+            }
+        }
         let target = match self.plugin_hosts.navigation_target(&token, &action.payload) {
             Ok(Some(target)) => target,
             Ok(None) => {

@@ -1,6 +1,7 @@
 //! Every child request remains bound to the parent-selected gateway principal.
 use super::*;
 mod ambient;
+mod journal;
 mod notifications;
 use crate::{
     composer::DraftScope,
@@ -92,6 +93,7 @@ struct Running {
     identity: DocumentIdentity,
     owner_lease: Option<crate::connections::Lease>,
     window_facts: Option<(bool, bool)>,
+    workspace_scope: Option<Value>,
     opened_at: std::time::Instant,
     token: String,
     source_connection: Connection,
@@ -155,6 +157,11 @@ impl PluginHosts {
         if running.token != token || running.scope.connection != scope.connection {
             return Err("The native plugin owner changed while navigating".into());
         }
+        if running.scope.profile != scope.profile
+            || request_profile.is_some_and(|profile| profile != running.request_profile)
+        {
+            running.workspace_scope = None;
+        }
         if let Some(profile) = request_profile {
             if !running.allowed_profiles.contains(profile) {
                 return Err("The plugin target profile is no longer served".into());
@@ -179,6 +186,114 @@ impl PluginHosts {
                 .as_ref()
                 .is_some_and(|running| running.uploads.is_busy())
     }
+    pub fn set_plugin_workspace_scope(
+        &mut self,
+        token: &str,
+        payload: &Value,
+    ) -> Result<(), String> {
+        let running = self.running.as_mut().ok_or("The plugin window is closed")?;
+        if !super::manager::notifications::same_request_owner(
+            &payload["native_owner"],
+            &running.token,
+            &running.key,
+            &running.request_source,
+            &running.request_profile,
+        ) || running.token != token
+        {
+            return Err("The plugin workspace owner changed".into());
+        }
+        if running
+            .owner_lease
+            .as_ref()
+            .is_some_and(|lease| !lease.is_valid())
+            || !running.sources.bindings().iter().any(|binding| {
+                binding.id == running.request_source
+                    && binding.profiles.contains(&running.request_profile)
+                    && binding.lease.as_ref().is_none_or(|lease| lease.is_valid())
+            })
+        {
+            return Err("The plugin workspace source retired".into());
+        }
+        if payload["clientOwner"]["connection_id"] != running.request_source
+            || payload["clientOwner"]["profile"] != running.request_profile
+        {
+            return Err("The plugin workspace lease expired".into());
+        }
+        let mode = payload["mode"].as_str().ok_or("Missing workspace mode")?;
+        if !matches!(mode, "sessions" | "bots") {
+            return Err("Invalid workspace mode".into());
+        }
+        if mode == "bots" {
+            let owner = payload["ownerKey"]
+                .as_str()
+                .filter(|s| !s.is_empty() && s.len() <= 4096)
+                .ok_or("Missing workspace owner")?;
+            let _ = owner;
+            match payload["target"]["kind"].as_str() {
+                Some("blocked")
+                    if payload["target"]["message"]
+                        .as_str()
+                        .is_some_and(|s| !s.is_empty() && s.len() <= 4096) =>
+                {
+                    ()
+                }
+                Some("route") => {
+                    let mut navigation = payload.clone();
+                    navigation["profile"] = payload["target"]["route"].clone();
+                    if self.navigation_target(token, &navigation)?.is_none() {
+                        return Err("The workspace source is still connecting".into());
+                    }
+                }
+                _ => return Err("Invalid workspace target".into()),
+            }
+        }
+        self.running.as_mut().unwrap().workspace_scope =
+            Some(json!({"mode":mode,"ownerKey":payload["ownerKey"],"target":payload["target"]}));
+        Ok(())
+    }
+    pub fn apply_plugin_workspace_to_new_chat(
+        &self,
+        token: &str,
+        payload: &mut Value,
+    ) -> Result<(), String> {
+        let running = self.running.as_ref().ok_or("The plugin window is closed")?;
+        if running.token != token
+            || !super::manager::notifications::same_request_owner(
+                &payload["native_owner"],
+                &running.token,
+                &running.key,
+                &running.request_source,
+                &running.request_profile,
+            )
+        {
+            return Err("The plugin workspace owner changed".into());
+        }
+        if payload["clientOwner"]["connection_id"] != running.request_source
+            || payload["clientOwner"]["profile"] != running.request_profile
+        {
+            return Err("The plugin workspace lease expired".into());
+        }
+        if !payload["profile"].is_null() || !payload["options"]["route"].is_null() {
+            return Ok(());
+        }
+        if let Some(scope) = running
+            .workspace_scope
+            .as_ref()
+            .filter(|s| s["mode"] == "bots")
+        {
+            match scope["target"]["kind"].as_str() {
+                Some("blocked") => {
+                    return Err(scope["target"]["message"]
+                        .as_str()
+                        .unwrap_or("Select a Bot or group first")
+                        .to_owned());
+                }
+                Some("route") => payload["profile"] = scope["target"]["route"].clone(),
+                _ => return Err("The Bot workspace target is unavailable".into()),
+            }
+        }
+        Ok(())
+    }
     pub fn navigation_target(
         &mut self,
         token: &str,
@@ -189,6 +304,11 @@ impl PluginHosts {
             || payload["native_owner"]["lifecycle_key"].as_str() != Some(&running.key)
         {
             return Err("The plugin owner changed while navigating".into());
+        }
+        if payload["clientOwner"]["connection_id"] != running.request_source
+            || payload["clientOwner"]["profile"] != running.request_profile
+        {
+            return Err("The plugin navigation lease expired".into());
         }
         let options = &payload["options"];
         let route = options
@@ -248,6 +368,7 @@ impl PluginHosts {
         {
             return Err("The source route no longer matches its verified owner".into());
         }
+        running.workspace_scope = None;
         running.key = crate::client::connection_key(connection)?;
         running.source_connection = connection.clone();
         running.owner_lease = target.lease.clone();
@@ -417,6 +538,7 @@ impl PluginHosts {
             identity,
             owner_lease,
             window_facts: None,
+            workspace_scope: None,
             opened_at: std::time::Instant::now(),
             token: uuid::Uuid::new_v4().to_string(),
             source_connection: connection.clone(),
@@ -607,7 +729,14 @@ impl PluginHosts {
                     if let (Some(focused), Some(visible)) =
                         (value["focused"].as_bool(), value["visible"].as_bool())
                     {
-                        self.running.as_mut().unwrap().window_facts = Some((focused, visible));
+                        let running = self.running.as_mut().unwrap();
+                        running.window_facts = Some((focused, visible));
+                        if let Err(error) = running
+                            .process
+                            .send(json!({"type":"plugin-window-state","visible":visible}))
+                        {
+                            self.error = Some(error);
+                        }
                     }
                 }
                 "plugin-bootstrap-ready" => {
@@ -674,8 +803,30 @@ impl PluginHosts {
                             Ok(Some(_)) => {}
                         }
                     }
-                    if kind == "adopt-sdk-route" {
+                    if kind == "prepared-submissions-read"
+                        || kind == "prepared-submissions-compare-and-set"
+                    {
+                        // The journal follows the native app origin, not the current
+                        // source: each entry already carries its source/profile owner.
+                        // A source switch must not strand an uncertain submission.
+                        let result =
+                            journal::path_for_storage(&self.running.as_ref().unwrap().storage_path)
+                                .and_then(|path| {
+                                    if kind == "prepared-submissions-read" {
+                                        journal::read(&path)
+                                    } else {
+                                        journal::compare_and_set(&path, &payload)
+                                    }
+                                });
+                        self.reply(&id, result);
+                    } else if kind == "adopt-sdk-route" {
                         let running = self.running.as_mut().unwrap();
+                        if payload["clientOwner"]["connection_id"] != running.request_source
+                            || payload["clientOwner"]["profile"] != running.request_profile
+                        {
+                            self.reply(&id, Err("The plugin activation lease expired".into()));
+                            continue;
+                        }
                         let source = payload["connectionId"]
                             .as_str()
                             .unwrap_or(&running.request_source)
@@ -813,6 +964,7 @@ impl PluginHosts {
                             | "open-session"
                             | "new-chat"
                             | "ensure-agent"
+                            | "workspace-scope"
                     ) {
                         let running = self.running.as_ref().unwrap();
                         let mut payload = payload;
@@ -1330,6 +1482,59 @@ mod tests {
             };
         open(&mut hosts, scope.clone(), &connection, owner.clone()).unwrap();
         let token = hosts.window_token().unwrap();
+        let running = hosts.running.as_ref().unwrap();
+        let owner_frame = json!({"window_token":running.token,"lifecycle_key":running.key,"connection_id":running.request_source,"profile":running.request_profile});
+        let blocked = json!({"native_owner":owner_frame,"clientOwner":{"connection_id":owner_frame["connection_id"],"profile":owner_frame["profile"]},"mode":"bots","ownerKey":"bot:one","target":{"kind":"blocked","message":"Select a bot"}});
+        hosts.set_plugin_workspace_scope(&token, &blocked).unwrap();
+        let mut new_chat = json!({"native_owner":owner_frame,"clientOwner":{"connection_id":owner_frame["connection_id"],"profile":owner_frame["profile"]},"options":{}});
+        assert_eq!(
+            hosts
+                .apply_plugin_workspace_to_new_chat(&token, &mut new_chat)
+                .unwrap_err(),
+            "Select a bot"
+        );
+        let route = json!({"connectionId":owner_frame["connection_id"],"profile":"other","targetProfile":"other","mode":"remote"});
+        hosts.set_plugin_workspace_scope(&token, &json!({"native_owner":owner_frame,"clientOwner":{"connection_id":owner_frame["connection_id"],"profile":owner_frame["profile"]},"mode":"bots","ownerKey":"bot:other","target":{"kind":"route","route":route}})).unwrap();
+        hosts
+            .apply_plugin_workspace_to_new_chat(&token, &mut new_chat)
+            .unwrap();
+        assert_eq!(new_chat["profile"]["targetProfile"], "other");
+        assert_eq!(
+            hosts
+                .navigation_target(&token, &new_chat)
+                .unwrap()
+                .unwrap()
+                .profile,
+            "other"
+        );
+        hosts
+            .adopt_parent_scope(&token, &scope, Some("other"))
+            .unwrap();
+        assert!(hosts.running.as_ref().unwrap().workspace_scope.is_none());
+        hosts
+            .adopt_parent_scope(&token, &scope, Some("default"))
+            .unwrap();
+        let mut forged = blocked.clone();
+        forged["native_owner"]["profile"] = "other".into();
+        assert!(hosts.set_plugin_workspace_scope(&token, &forged).is_err());
+        let mut stale_client = blocked.clone();
+        stale_client["clientOwner"]["connection_id"] = "retired-source".into();
+        assert!(
+            hosts
+                .set_plugin_workspace_scope(&token, &stale_client)
+                .is_err()
+        );
+        hosts
+            .set_plugin_workspace_scope(
+                &token,
+                &json!({"native_owner":owner_frame,"clientOwner":{"connection_id":owner_frame["connection_id"],"profile":owner_frame["profile"]},"mode":"sessions"}),
+            )
+            .unwrap();
+        new_chat["profile"] = Value::Null;
+        hosts
+            .apply_plugin_workspace_to_new_chat(&token, &mut new_chat)
+            .unwrap();
+        assert!(new_chat["profile"].is_null());
         let first = spawned.lock().unwrap()[0].clone();
         first.lock().unwrap().state = "sdk-state".into();
         hosts.pending.insert("plugin-host.old".into(), "old".into());

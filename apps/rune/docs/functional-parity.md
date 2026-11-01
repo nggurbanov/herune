@@ -10,8 +10,11 @@ discovery and hosted-agent selection) is excluded from this parity phase. Existi
 Cloud configuration is preserved and is not automatically connected. Generic URL
 connections, access headers and generic remote OAuth remain in scope.
 
-Current testing and builds are limited to Linux. macOS and Windows remain future
-acceptance targets and are not represented as verified by this phase.
+Mac reported an arm64 ad-hoc build and a real generic OAuth chat with history after
+a cold restart on 2026-10-31. This is bounded evidence for that scenario, not
+acceptance of the plugin host, reconnect variants, signing or other platforms.
+Linux synthetic fixture results and Windows acceptance are tracked separately.
+Historical next-slices documents describe their original checkpoints.
 
 | Area | Implemented now | Still required before full acceptance |
 |---|---|---|
@@ -41,6 +44,20 @@ acceptance targets and are not represented as verified by this phase.
 | Notifications and feedback | Real Linux D-Bus delivery, device preferences, seven live source kinds including background processes and original SDK plugins, reconnect/replay/focus guards, bounded broker, owner-bound actions, native/SDK completion cue ownership and all fourteen original sounds plus None/mute/preview | Native/SDK speech-segment ownership, HUD/haptics, pure-occlusion visibility and macOS/Windows adapters; see native-notifications-parity.md, native-plugin-notifications.md and native-completion-sounds-parity.md |
 | Background processes | Per-session authenticated process list/kill, running-to-exited completion, linger/output/confirmed stop/dismiss/rewind and one-shot read-only runtime recovery; visible-running safety polling and scope retirement | Full concurrent tile/peer integration and external-host/platform acceptance; see native-background-processes-parity.md |
 | Audio-file playback | Actual native WAV/MP3/Vorbis/FLAC/AAC and Ogg Opus playback, paused metadata, seek/volume/mute/pitch-preserving 0.25–4x, authenticated agent files and credential-free external HTTP, bounded range/sequential transport, cancellation generations and exact original saving; transcript FILE controls with independent mounted lifetimes, local Markdown audio links and assistant MEDIA audio mapped to separate inline players; pinned decoder metadata/allocation patches | Wider MEDIA streaming/lifetime and native acceptance beyond the bounded case below, remaining directive/image-form audio mapping, same-instance ticket refresh and expanded keyboard/native acceptance, multichannel/chained/container Opus, music-quality and native OS acceptance; video/PDF/HTML remain separate; see native-audio-player-parity.md |
+
+## Native plugin-host boundary
+
+The extracted host supports the tested SDK and bundled Bots workflows. The
+native host already had partial implementations of embedded plugin views; the
+Electron renderer supported additional management and media workflows. Connector
+account and toolset provider/credential editing, embedded media, cross-window
+relay, file grants and preview execution remain unavailable in these native
+views. The native toolbar does not yet apply plugin workspace scope, and native
+socket reconnection and platform acceptance remain open. The SDK model catalog
+menu exports are not yet ported. These are parity gaps, not proof that the
+Electron workflows were preserved. Plugin-originated workspace changes use
+`setWorkspaceScopeAsync` and wait for an owner-verified native acknowledgement;
+the synchronous call reports success only for an already acknowledged value.
 
 ## Everyday alpha status (2026-10-31)
 

@@ -2,7 +2,7 @@ name: Rune native distribution builds
 on:
   workflow_dispatch:
   pull_request:
-    paths: ['apps/rune/**', '.github/workflows/rune-native-distribution.yml']
+    paths: ['apps/rune/**', 'apps/shared/**', 'packages/**', 'scripts/build/native.mjs', 'package*.json', '.github/workflows/rune-native-distribution.yml']
 permissions:
   contents: read
 jobs:
@@ -26,6 +26,11 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 26
+      - name: Install locked JavaScript dependencies
+        run: npm ci
       - name: Linux native prerequisites
         if: runner.os == 'Linux'
         run: |
@@ -39,11 +44,14 @@ jobs:
           python3 apps/rune/vendor/rune/scripts/verify-hermes-source.py
           node --test apps/rune/scripts/package-recipes.test.mjs
           cargo +1.95.0 fmt --manifest-path apps/rune/Cargo.toml --check
-      - name: Compile development, host test targets, and release
+      - name: Remove prebuilt plugin host assets
+        run: rm -f apps/rune/assets/plugin-host/{assets.json,assets.json.gz,manifest.json,THIRD_PARTY_LICENSES.txt}
+      - name: Generate SDK and compile release from source
+        run: npm run build -- --target "${{ matrix.target }}"
+      - name: Compile development and host test targets
         run: |
           cargo +1.95.0 build --locked --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}"
           cargo +1.95.0 test --locked --no-run --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}"
-          cargo +1.95.0 build --locked --release --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}"
       - name: Run nonhardware behavior tests
         run: |
           cargo +1.95.0 test --locked --manifest-path apps/rune/Cargo.toml --target "${{ matrix.target }}" draft_text_and_launch_choices_stay_with_the_connection_profile_and_session
@@ -56,6 +64,10 @@ jobs:
           git archive --format=tar --output=rune-evidence/source.tar HEAD
           rustc +1.95.0 -vV > rune-evidence/rustc.txt
           cargo +1.95.0 -V > rune-evidence/cargo.txt
+          node --version > rune-evidence/node.txt
+          npm --version > rune-evidence/npm.txt
+          cp package-lock.json apps/rune/Cargo.lock rune-evidence/
+          cp apps/rune/assets/plugin-host/THIRD_PARTY_LICENSES.txt rune-evidence/PLUGIN-HOST-LICENSES.txt
           git ls-files -s apps/rune > rune-evidence/local-sources-git-index.txt
           cp apps/rune/THIRD_PARTY_NOTICES.md LICENSE rune-evidence/
           if [ "$RUNNER_OS" = Linux ]; then uname -a > rune-evidence/host.txt; ldd apps/rune/target/${{ matrix.target }}/release/herune > rune-evidence/linkage.txt; fi

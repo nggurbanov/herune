@@ -59,7 +59,8 @@ function handle(event){
       else if(route.includes('config'))answer(id,{config:{}})
       else if(route.includes('ui-state'))answer(id,{ok:true,state:{},value:{},data:{},revision:1})
       else answer(id,{ok:true,items:[],groups:[],sources:[]})
-    }else if(kind==='notify')answer(id,{ok:true})
+    }else if(kind==='workspace-scope')answer(id,true)
+    else if(kind==='notify')answer(id,{ok:true})
     else throw new Error('Unsupported native bridge door requested by the original Bots plugin: '+kind)
   }
   if(event.type==='bots-inspected'){
@@ -83,4 +84,4 @@ const done=new Promise((resolve,reject)=>{
 })
 send({type:'document',document:{title:'Synthetic original Hermes Bots',html,assets,allow_media:false}})
 await done
-console.log(JSON.stringify({native_window:true,original_bundled_bots:true,synthetic_profiles:2,group_action:true,group_dialog:mode==='group',petdex:mode==='petdex',snapshot:snapshot?path.resolve(snapshot):null}))
+console.log(JSON.stringify({native_window:true,extracted_bundled_bots:true,synthetic_profiles:2,group_action:true,group_dialog:mode==='group',petdex:mode==='petdex',snapshot:snapshot?path.resolve(snapshot):null}))

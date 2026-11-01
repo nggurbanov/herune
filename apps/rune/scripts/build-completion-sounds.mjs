@@ -9,7 +9,7 @@ import { chromium } from 'playwright'
 
 const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = path.resolve(app, '../..')
-const input = 'apps/desktop/src/lib/completion-sound.ts'
+const input = 'apps/rune/scripts/completion-sound-source.ts'
 const original = fs.readFileSync(path.join(repo,input),'utf8')
 const begin = original.indexOf('type OscType = ')
 const end = original.indexOf('\nfunction playVariant(')

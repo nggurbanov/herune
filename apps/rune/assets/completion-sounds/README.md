@@ -1,7 +1,7 @@
 # Hermes completion sound bank
 
 These fourteen WAV files are rendered from the retained Hermes Desktop MIT
-synthesis in `apps/desktop/src/lib/completion-sound.ts`. `manifest.json` records
+synthesis in `apps/rune/scripts/completion-sound-source.ts` (extracted from the archived Desktop baseline). `manifest.json` records
 the upstream baseline, exact source and generator hashes, Chromium version,
 seed, PCM encoding, names and asset hashes. The accompanying LICENSE.txt
 preserves the repository license.

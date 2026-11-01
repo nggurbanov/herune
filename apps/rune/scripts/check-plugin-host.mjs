@@ -42,7 +42,7 @@ function onEvent(event) {
       send({ type: 'plugin-load', source, origin: '/synthetic/proof/plugin.js', owner: { profile: 'research', target_profile: 'research', profiles: [{ name: 'research' }], connection_id: 'native:synthetic', busy: false } })
       break
     case 'plugin-rendered':
-      require(event.text.includes('Real Hermes SDK renderer') && event.text.includes('Clicks 0'), 'The original SDK components did not paint')
+      require(event.text.includes('Real Hermes SDK renderer') && event.text.includes('Clicks 0'), 'The extracted SDK components did not paint')
       rendered = true
       for (const seq of [7, 7, 6, 8]) send({ type: 'gateway-event', event: { type: 'proof.event', profile: 'research', connectionId: 'native:synthetic', session_id: 'synthetic', seq, payload: { text: 'Synthetic event' } } })
       send({ type: 'proof-click' })
@@ -80,15 +80,15 @@ function onEvent(event) {
         require(event.payload.receipt === gatewayReceipt, 'Unexpected stream send')
         const frame = JSON.parse(event.payload.frame.text)
         require(['native.proof', 'client.capabilities', 'ping', ...(canonical ? ['session.create', 'session.mutate'] : [])].includes(frame.method), 'Unexpected gateway wire method: ' + frame.method)
-        if (frame.method === 'native.proof') require(frame.params.profile === 'research', 'The original client lost its RPC owner')
+        if (frame.method === 'native.proof') require(frame.params.profile === 'research', 'The extracted client lost its RPC owner')
         send({ type: 'plugin-response', id: event.id, value: { accepted: true } })
         let result = frame.method === 'native.proof' ? { method: frame.method, profile: frame.params.profile } : { declines_not_shown: true }
         if (frame.method === 'session.create') {
-          require(frame.params.profile === 'research' && typeof frame.params.request_id === 'string' && frame.params.source === 'gui', 'The original canonical create identity was not prepared')
+          require(frame.params.profile === 'research' && typeof frame.params.request_id === 'string' && frame.params.source === 'gui', 'The extracted canonical create identity was not prepared')
           result = { session_id: 'synthetic-session', stored_session_id: 'synthetic-stored', revision: 4, execution_generation: 2, info: { profile_name: 'research' }, prompts: [], messages: [], running: false }
         }
         if (frame.method === 'session.mutate') {
-          require(frame.params.profile === 'research' && frame.params.operation === 'rename' && frame.params.expected_revision === 4 && frame.params.payload.title === 'Synthetic rename' && typeof frame.params.request_id === 'string', 'The original canonical CAS mutation was not prepared')
+          require(frame.params.profile === 'research' && frame.params.operation === 'rename' && frame.params.expected_revision === 4 && frame.params.payload.title === 'Synthetic rename' && typeof frame.params.request_id === 'string', 'The extracted canonical CAS mutation was not prepared')
           result = { session_id: 'synthetic-session', revision: 5, status: 'applied' }
         }
         if (frame.id != null) send({ type: 'plugin-socket', receipt: gatewayReceipt, event: 'message', data: { text: JSON.stringify({ jsonrpc: '2.0', id: frame.id, result }) } })
@@ -97,7 +97,7 @@ function onEvent(event) {
         send({ type: 'plugin-socket', receipt: event.payload.receipt, event: 'close', data: { code: 1000, reason: '', clean: true } })
       } else throw new Error('Unexpected backend operation in a synthetic probe: ' + event.kind)
       break
-    case 'proof-canonical': require(event.created.info.stored_session_id === 'synthetic-stored' && event.result.ok === true && event.result.revision === 5, 'The original canonical snapshot/mutation projection failed'); canonicalDone = true; break
+    case 'proof-canonical': require(event.created.info.stored_session_id === 'synthetic-stored' && event.result.ok === true && event.result.revision === 5, 'The extracted canonical snapshot/mutation projection failed'); canonicalDone = true; break
     case 'proof-upload': require(event.value.profile === 'research' && event.value.received_bytes === 3, 'The multipart result changed'); uploaded = true; break
     case 'proof-socket': require(event.value.item === 'synthetic namespace stream', 'The namespace stream did not deliver its JSON'); stream = true; break
     case 'proof-after-click':
@@ -141,4 +141,4 @@ const completed = new Promise((resolve, reject) => {
 })
 send({ type: 'document', document: { title: 'Synthetic Hermes SDK proof', html, assets, allow_media: false } })
 await completed
-console.log(JSON.stringify({ native_window: true, original_sdk: true, canonical_adapter: canonical, react_hook: true, rpc_owner: 'research', deduplicated_events: events, storage: true, chunked_upload: true, namespace_stream: true, disposed: true, snapshot: snapshot ? path.resolve(snapshot) : null }))
+console.log(JSON.stringify({ native_window: true, extracted_sdk: true, canonical_adapter: canonical, react_hook: true, rpc_owner: 'research', deduplicated_events: events, storage: true, chunked_upload: true, namespace_stream: true, disposed: true, snapshot: snapshot ? path.resolve(snapshot) : null }))

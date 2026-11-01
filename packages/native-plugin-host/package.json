@@ -1,0 +1,14 @@
+{
+  "name": "@herune/native-plugin-host",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test-runner.mjs"
+  },
+  "dependencies": {
+    "@tailwindcss/typography": "0.5.20",
+    "@vscode/codicons": "0.0.45",
+    "katex": "0.19.0",
+    "tw-shimmer": "0.4.13"
+  }
+}

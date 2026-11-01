@@ -10,29 +10,37 @@ import tailwindcss from '@tailwindcss/vite'
 
 const rune = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const repo = path.resolve(rune, '../..')
-const desktop = path.resolve(rune, '../desktop')
+const host = path.join(repo, 'packages/native-plugin-host')
+const desktopPath = path.join(repo, 'apps/desktop')
+const desktop = fs.existsSync(desktopPath) ? fs.realpathSync(desktopPath) : desktopPath
 const shared = path.resolve(rune, '../shared/src')
 const output = path.join(rune, 'assets/plugin-host')
-const requireFromDesktop = createRequire(path.join(desktop, 'package.json'))
+const requireFromDesktop = createRequire(path.join(host, 'package.json'))
 const react = path.dirname(requireFromDesktop.resolve('react/package.json'))
 const reactDom = path.dirname(requireFromDesktop.resolve('react-dom/package.json'))
 const modules = new Set()
 const sha = value => crypto.createHash('sha256').update(value).digest('hex')
 const relative = file => path.relative(repo, file).split(path.sep).join('/')
-function atomic(file, bytes) { fs.writeFileSync(`${file}.new`, bytes); fs.renameSync(`${file}.new`, file) }
+function atomic(file, bytes) {
+  const content = Buffer.from(bytes)
+  if (fs.existsSync(file) && fs.readFileSync(file).equals(content)) return
+  fs.writeFileSync(`${file}.new`, content)
+  fs.renameSync(`${file}.new`, file)
+}
+function deny(id) { const file=id.split('?')[0]; if(!path.isAbsolute(file) || !fs.existsSync(file)) return; const real=fs.realpathSync(file); if(real === desktop || real.startsWith(desktop+path.sep)) throw new Error(`Desktop input forbidden: ${real}`) }
 const result = await build({
-  logLevel: 'error', configFile: false, envDir: false, envPrefix: [], root: desktop,
-  plugins: [tailwindcss(), { name: 'plugin-sdk-provenance', generateBundle() { for (const id of this.getModuleIds()) modules.add(id) } }],
+  logLevel: 'error', configFile: false, envDir: false, envPrefix: [], root: host,
+  plugins: [tailwindcss(), { name: 'plugin-sdk-provenance', enforce:'pre', async resolveId(source, importer, options) { const result=await this.resolve(source,importer,{...options,skipSelf:true}); if(result) deny(result.id); return result }, load(id) { deny(id) }, generateBundle() { for (const id of this.getModuleIds()) { deny(id); modules.add(id) } } }],
   resolve: { dedupe: ['react', 'react-dom'], alias: {
-    react, 'react-dom': reactDom, '@': path.join(desktop, 'src'),
-    '@hermes/plugin-sdk': path.join(desktop, 'src/sdk/index.ts'),
+    react, 'react-dom': reactDom,
+    '@hermes/plugin-sdk': path.join(repo, 'packages/plugin-sdk/src/index.ts'),
     '@hermes/shared/ansi': path.join(shared, 'ansi.ts'), '@hermes/shared/billing': path.join(shared, 'billing-types.ts'),
     '@hermes/shared/color': path.join(shared, 'color.ts'), '@hermes/shared/i18n': path.join(shared, 'i18n.ts'),
     '@hermes/shared/translucency': path.join(shared, 'translucency.ts'), '@hermes/shared': path.join(shared, 'index.ts'),
   } },
   define: { 'process.env.NODE_ENV': JSON.stringify('production'), 'import.meta.env.MODE': JSON.stringify('production'), 'import.meta.env.PROD': 'true', 'import.meta.env.DEV': 'false' },
   build: { write: false, minify: true, assetsInlineLimit: 100000000,
-    lib: { entry: path.join(rune, 'src/plugin_host/web/host.tsx'), formats: ['es'], fileName: () => 'host.js' }, outDir: output },
+    lib: { entry: path.join(host, 'src/host.tsx'), formats: ['es'], fileName: () => 'host.js' }, outDir: output },
 })
 const assets = {}
 for (const item of (Array.isArray(result) ? result : [result]).flatMap(result => result.output)) {
@@ -62,7 +70,21 @@ for (const id of modules) {
     if (found && found[1].name) packages.set(`${found[1].name}@${found[1].version}`, found)
   }
 }
-for (const file of ['package-lock.json', 'package.json', 'apps/desktop/package.json', 'apps/rune/scripts/build-plugin-host.mjs', 'LICENSE']) source(path.join(repo, file))
+// Vite embeds CSS url() assets without listing them as JavaScript modules.
+for (const id of modules) {
+  const file=id.split('?')[0]
+  if (!path.isAbsolute(file) || !file.endsWith('.css') || !fs.existsSync(file)) continue
+  for (const match of fs.readFileSync(file,'utf8').matchAll(/url\(\s*['"]?([^'")]+)['"]?\s*\)/g)) {
+    const value=match[1].trim().split('?')[0]
+    if (!value || /^(?:data:|https?:|#)/i.test(value)) continue
+    const asset=path.resolve(path.dirname(file),decodeURIComponent(value)); deny(asset)
+    if (fs.existsSync(asset) && asset.startsWith(repo + path.sep) && !asset.includes(`${path.sep}node_modules${path.sep}`)) source(asset)
+  }
+}
+// Type-only imports are not present in the bundled module graph.
+const typeFiles = execFileSync(path.join(repo, 'node_modules/.bin/tsc'), ['-p', path.join(host, 'tsconfig.json'), '--listFilesOnly'], { cwd: host, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }).split(/\r?\n/).filter(Boolean)
+for (const file of typeFiles) { deny(file); if (path.isAbsolute(file) && file.startsWith(repo + path.sep) && !file.includes(`${path.sep}node_modules${path.sep}`)) source(file) }
+for (const file of ['package-lock.json', 'package.json', 'packages/native-plugin-host/package.json', 'packages/native-plugin-host/src/fonts/OFL-JetBrainsMono.txt', 'packages/plugin-sdk/package.json', 'packages/builtin-bots/package.json', 'apps/rune/scripts/build-plugin-host.mjs', 'LICENSE']) source(path.join(repo, file))
 const licenses = []
 const dependencies = []
 for (const [name, [dir, manifest]] of [...packages].sort(([a], [b]) => a.localeCompare(b))) {
@@ -74,7 +96,7 @@ for (const [name, [dir, manifest]] of [...packages].sort(([a], [b]) => a.localeC
 if (inputs.size < 100 || dependencies.length < 20) throw new Error('The SDK provenance graph is unexpectedly incomplete')
 const data = JSON.stringify(assets)
 const compressed = zlib.gzipSync(Buffer.from(data), { level: 9 })
-const notice = `Hermes Desktop React SDK\n${fs.readFileSync(path.join(repo, 'LICENSE'), 'utf8')}\n\n${licenses.join('\n\n====================\n\n')}`.replace(/\r\n?/g, '\n')
+const notice = `Herune native plugin host and extracted Hermes SDK\n${fs.readFileSync(path.join(repo, 'LICENSE'), 'utf8')}\n\nJetBrains Mono\n${fs.readFileSync(path.join(host, 'src/fonts/OFL-JetBrainsMono.txt'), 'utf8')}\n\n${licenses.join('\n\n====================\n\n')}`.replace(/\r\n?/g, '\n').replace(/[ \t]+$/gm, '')
 const manifest = {
   schema: 1, source_head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim(),
   build_command: 'node apps/rune/scripts/build-plugin-host.mjs', node: process.version,
@@ -88,4 +110,4 @@ atomic(path.join(output, 'assets.json'), data)
 atomic(path.join(output, 'assets.json.gz'), compressed)
 atomic(path.join(output, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
 atomic(path.join(output, 'THIRD_PARTY_LICENSES.txt'), notice)
-console.log(`Built plugin SDK: ${inputs.size} source inputs, ${dependencies.length} dependency packages, ${(compressed.length / 1024 / 1024).toFixed(1)} MiB archive`)
+console.log(`Built native plugin host: ${inputs.size} source inputs, ${dependencies.length} dependency packages, ${(compressed.length / 1024 / 1024).toFixed(1)} MiB archive`)

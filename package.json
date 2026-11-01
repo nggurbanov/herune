@@ -4,26 +4,28 @@
   "description": "Standalone desktop client for existing Hermes agents.",
   "private": true,
   "workspaces": [
-    "apps/desktop",
-    "apps/shared"
+    "apps/shared",
+    "packages/plugin-sdk",
+    "packages/builtin-bots",
+    "packages/native-plugin-host"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace apps/desktop",
-    "build": "npm run build --workspace apps/desktop",
-    "pack": "npm run pack --workspace apps/desktop",
-    "dist": "npm run dist --workspace apps/desktop",
-    "typecheck": "npm run typecheck --workspace apps/desktop && npm run typecheck --workspace apps/shared",
-    "test": "npm run test --workspace apps/desktop",
-    "test:external": "npm run test:external --workspace apps/desktop",
-    "test:ui": "npm run test:ui --workspace apps/desktop",
-    "test:electron": "npm run test:desktop:platforms --workspace apps/desktop",
-    "check": "npm run typecheck && npm run test && npm run lint --workspaces",
-    "fix": "npm run fix --workspaces",
-    "dev:rune": "cargo run --manifest-path apps/rune/Cargo.toml --",
-    "test:rune": "cargo test --manifest-path apps/rune/Cargo.toml",
-    "build:rune": "cargo build --manifest-path apps/rune/Cargo.toml --release",
+    "dev": "node scripts/build/native.mjs dev",
+    "build": "node scripts/build/native.mjs build",
+    "pack": "node scripts/build/native.mjs pack",
+    "dist": "node scripts/build/native.mjs dist",
+    "build:sdk": "node apps/rune/scripts/build-plugin-host.mjs",
+    "typecheck": "npm run typecheck --workspace apps/shared && tsc -p packages/plugin-sdk/tsconfig.json --noEmit && tsc -p packages/builtin-bots/tsconfig.json",
+    "test": "npm run test --workspace packages/plugin-sdk && npm run test --workspace packages/builtin-bots && npm run test --workspace packages/native-plugin-host && node --test apps/rune/scripts/package-recipes.test.mjs",
+    "test:rune": "cargo +1.95.0 test --locked --manifest-path apps/rune/Cargo.toml",
+    "dev:rune": "npm run dev",
+    "build:rune": "npm run build",
     "test:rune:ui": "node apps/rune/scripts/check-scenes.mjs",
-    "test:rune:composer": "node apps/rune/scripts/check-composer.mjs"
+    "test:rune:composer": "node apps/rune/scripts/check-composer.mjs",
+    "check": "npm run typecheck && npm test && npm run test:rune",
+    "pretypecheck": "npm run build:sdk",
+    "pretest": "npm run build:sdk",
+    "pretest:rune": "npm run build:sdk"
   },
   "repository": {
     "type": "git",
@@ -35,19 +37,20 @@
   },
   "homepage": "https://github.com/nggurbanov/herune#readme",
   "devDependencies": {
-    "@eslint/js": "9.39.5",
-    "eslint": "10.12.0",
-    "eslint-plugin-perfectionist": "5.12.1",
-    "eslint-plugin-react-hooks": "7.1.1",
-    "eslint-plugin-unused-imports": "4.4.1",
-    "globals": "17.13.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@testing-library/dom": "10.4.2",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "esbuild": "0.28.2",
+    "jsdom": "29.1.1",
+    "playwright": "1.56.1",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.71.1"
+    "vite": "8.3.4",
+    "vitest": "4.1.12"
   },
   "overrides": {
-    "@electron/osx-sign": {
-      "isbinaryfile": "5.0.7"
-    },
     "lodash": "4.18.1",
     "protobufjs": "^8.7.1",
     "brace-expansion": "5.0.12",
@@ -74,14 +77,15 @@
   },
   "allowScripts": {
     "unicode-animations": false,
-    "esbuild@0.28.2": true,
-    "node-pty@1.1.0": true,
-    "electron-winstaller@5.4.0": true,
-    "fsevents@2.3.3": true,
-    "get-windows@9.3.0": true
+    "esbuild@0.28.2": true
   },
   "dependencies": {
-    "js-yaml": "4.3.2",
-    "semver": "7.7.4"
+    "@nanostores/react": "1.1.0",
+    "@tanstack/react-query": "5.104.1",
+    "nanostores": "1.4.2",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-router": "8.4.0",
+    "tailwindcss": "4.3.3"
   }
 }

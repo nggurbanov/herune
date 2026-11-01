@@ -21,18 +21,20 @@ verification boundaries and remaining work.
 
 ## Build and run
 
-Rust 1.95+ and the platform's native prerequisites are required. The
+Node 26+, npm 11.17+, Rust 1.95.0 and the platform's native prerequisites are required. The
 [platform setup guide](apps/rune/README.md#build-and-run) lists them.
 
 ```sh
-npm run dev:rune
-npm run dev:rune -- --gateway https://your-existing-gateway.example
-npm run build:rune
+npm ci
+npm run dev
+npm run dev -- --gateway https://your-existing-gateway.example
+npm run build
 npm run test:rune
 ```
 
-These native commands do not need a Python agent checkout or an npm dependency
-installation. Rune and other native dependencies are pinned in the Cargo lockfile.
+The native commands generate the plugin host from JavaScript source before building.
+Rune and other native dependencies are pinned in the Cargo lockfile. The SDK and
+lockfile are currently being integrated; a clean-source build is still pending.
 
 ## Connect your agent
 
@@ -62,10 +64,9 @@ origin in [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-age
 The original GitHub fork is preserved separately as
 [hermes-desktop-rune-archive](https://github.com/nggurbanov/hermes-desktop-rune-archive).
 
-The retained Electron desktop in `apps/desktop` is the behavioral and spatial
-baseline for the native port. It is kept for compatibility work; it is not the
-primary Herune application. Its separate Node/Electron build instructions are in
-[apps/desktop/BUILDING.md](apps/desktop/BUILDING.md).
+The Electron desktop remains the behavioral and spatial baseline for the native
+port. Its exact source and history are preserved in the
+[Electron reference archive](https://github.com/nggurbanov/herune/tree/archive/electron-reference-20261101/apps/desktop).
 
 The upstream snapshot and client protocol provenance are recorded in
 [desktop-baseline.json](desktop-baseline.json). Hermes retains ownership of agent

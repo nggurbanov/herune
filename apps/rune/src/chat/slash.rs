@@ -216,10 +216,8 @@ fn unknown(message: &str) -> CallError {
 }
 pub(super) fn desktop_refusal(catalog: &Value, name: &str, arg: &str) -> Option<String> {
     let meta = &catalog["commands"][name];
-    let fallback: Value = serde_json::from_str(include_str!(
-        "../../../desktop/src/lib/desktop-slash-registry.json"
-    ))
-    .unwrap_or_default();
+    let fallback: Value =
+        serde_json::from_str(include_str!("desktop-slash-registry.json")).unwrap_or_default();
     let disposition = meta["desktop"]
         .as_str()
         .or_else(|| fallback[format!("/{name}")].as_str());

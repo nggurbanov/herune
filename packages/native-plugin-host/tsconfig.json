@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@hermes/shared": [
+        "../../apps/shared/src/index.ts"
+      ],
+      "@hermes/shared/*": [
+        "../../apps/shared/src/*"
+      ],
+      "@hermes/plugin-sdk": [
+        "../plugin-sdk/src/index.ts"
+      ]
+    },
+    "types": [
+      "vite/client"
+    ]
+  },
+  "include": [
+    "src",
+    "../builtin-bots/src/vite-env.d.ts"
+  ]
+}

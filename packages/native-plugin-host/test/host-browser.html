@@ -1,0 +1,15 @@
+<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="../dist-host/native-plugin-host.css"><div id="root"></div>
+<script>
+window.fixtureFrames=[]; window.addEventListener('error',e=>window.fixtureFrames.push({type:'window-error',message:e.error?.stack||e.message}));window.addEventListener('unhandledrejection',e=>window.fixtureFrames.push({type:'unhandled',message:String(e.reason?.stack||e.reason)}));
+const send = message => window.dispatchEvent(new CustomEvent('hermes-host-message',{detail:message}));
+window.ipc={postMessage(raw){const m=JSON.parse(raw);window.fixtureFrames.push(m); if(m.type==='plugin-bootstrap-ready') {setTimeout(()=>send({type:'plugin-load',source:location.search.includes('external') ? `import React from 'react'; import {host,queryClient} from '@hermes/plugin-sdk'; export default {id:'external-fixture',register(ctx){ctx.storage.set('started',true);ctx.onEvent('fixture.event',()=>{globalThis.fixtureCallback=(globalThis.fixtureCallback||0)+1});ctx.register({area:'panes',id:'panel',render:()=>React.createElement('button',{onClick:()=>host.request('fixture.echo',{value:1}).then(()=>ctx.storage.set('clicked',true))},'Run external')});import('@hermes/plugin-sdk').then(m=>globalThis.fixtureDynamic=m.queryClient===queryClient)}}` : 'builtin:hermes-bots',origin:'fixture',owner:{connection_id:'source-a',profile:'default',profiles:[{name:'default'}]}}),0);return} if(m.type!=='plugin-request') return;
+ const reply=value=>send({type:'plugin-response',id:m.id,value});
+ if(m.kind==='plugin-gateway-prepare') return queueMicrotask(()=>reply({url:'ws://hermes-native-gateway.invalid/socket-1'}));
+ if(m.kind==='plugin-socket-open') return queueMicrotask(()=>{reply({});send({type:'plugin-socket',receipt:'socket-1',event:'open',data:{}})});
+ if(m.kind==='plugin-socket-send') return queueMicrotask(()=>{reply({});const f=JSON.parse(m.payload.frame.text);if(f.id!==undefined){let result={};if(f.method==='profiles.list')result={profiles:[{name:'default',display_name:'Hermes',sourceScoped:true,connectionId:'source-a',connectionKind:'local',targetProfile:'default'}]};if(f.method==='session.list')result={sessions:[]};if(f.method==='session.create')result={session_id:'runtime-1',stored_session_id:'stored-1'};if(f.method==='cron.list')result={jobs:[]};if(f.method==='groups.list')result={rooms:[],next_offset:null};send({type:'plugin-socket',receipt:'socket-1',event:'message',data:{text:JSON.stringify({jsonrpc:'2.0',id:f.id,result})}})}});
+ if(m.kind==='registry-roster') return queueMicrotask(()=>reply({primary:'source-a',connections:[{id:'source-a',kind:'local',mode:'local',label:'Synthetic',attached:true,profiles:[{name:'default'}]}]}));
+ if(m.kind==='registry-metadata') return queueMicrotask(()=>reply({primary:'source-a',connections:[{id:'source-a',kind:'local',label:'Synthetic',attached:true,tokenSet:false,tokenPreview:null}]}));
+ if(m.kind==='workspace-scope') return queueMicrotask(()=>reply(true));
+ if(m.kind==='api') return queueMicrotask(()=>reply({}));
+ queueMicrotask(()=>reply({ok:true}));}};
+</script><script type="module" src="../dist-host/host.js"></script>

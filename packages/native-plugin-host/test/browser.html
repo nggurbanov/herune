@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><title>Native adapter browser fixture</title><pre id="result">running</pre>
+<script type="module">
+import {NativeBridge, createNativeServices, installHostServices, createInstalledPluginRuntime, queryClient} from '../dist/adapter.js';
+const output = document.querySelector('#result');
+try {
+  const frames = [];
+  const bridge = new NativeBridge({postMessage: value => frames.push(JSON.parse(value))});
+  const services = createNativeServices(bridge, localStorage);
+  services.hydrate({profile:'fixture',connection_id:'source',profiles:['fixture']});
+  const uninstall = installHostServices(services.host);
+  const runtime = createInstalledPluginRuntime(services.context);
+  const code = `import * as React from 'react'; import {host, queryClient} from '@hermes/plugin-sdk';
+    export default { id: 'fixture', register(ctx) {
+      globalThis.fixtureReact = React; globalThis.fixtureQuery = queryClient; ctx.storage.set('key','saved');
+      ctx.register({id:'panel',area:'panes',render:()=>React.createElement('span',null,'External plugin')});
+      ctx.onEvent('test', e=>{globalThis.fixtureEvents=(globalThis.fixtureEvents||0)+1});
+      import('@hermes/plugin-sdk').then(m=>globalThis.fixtureDynamic = m.host === host);
+    }};`;
+  const instance = await runtime.load(code, 'browser-fixture');
+  await new Promise(resolve => setTimeout(resolve,100));
+  services.feedEvent({type:'test',profile:'fixture',connectionId:'source'});
+  const registered = services.registry.getArea('panes').length === 1;
+  instance.deactivate();
+  services.feedEvent({type:'test',profile:'fixture',connectionId:'source'});
+  const result = {registered, storage:frames.some(x=>x.values?.['hermes.plugin.fixture.key']==='"saved"'), events:globalThis.fixtureEvents, unloaded:services.registry.getArea('panes').length===0, reactSingleton:globalThis.fixtureReact.createElement===globalThis.__HERMES_REACT__.createElement, querySingleton:globalThis.fixtureQuery===queryClient, dynamicSdk:globalThis.fixtureDynamic===true};
+  runtime.dispose(); uninstall(); bridge.close();
+  output.textContent = JSON.stringify(result);
+} catch (error) { output.textContent = 'ERROR: '+String(error.stack||error) }
+</script>

@@ -1,5 +1,7 @@
 # Native Rune packaging
 
+Root `npm run pack --` and `npm run dist --` first regenerate the plugin host and build the locked native release, then forward the supplied options to the host recipe. Both require `--out` and `--version`; use `--target TRIPLE` for a Cargo target. For example, on macOS run `npm run pack -- --out /tmp/Herune.app --version 1.2.3` or `npm run dist -- --out /tmp/Herune.app --version 1.2.3 --zip /tmp/Herune.zip`. The two commands use the same recipe; the optional output flags determine the artifacts. Windows also requires `--arch`, `--publisher`, `--makeappx` and `--msix`. `CARGO_TARGET_DIR`, when set, selects the build output root; otherwise it is `apps/rune/target`.
+
 These recipes accept an already linked native release executable and do not ship an agent, Node, Python or an updater. Run on the target host with Node. Output trees must not exist. Version is three or four numeric components (MSIX adds `.0` to three); the Rust prerelease version must be mapped deliberately by release engineering.
 
 ```
