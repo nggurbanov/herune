@@ -44,12 +44,12 @@ jobs:
       - name: Test native contracts
         run: cargo +1.95.0 test --locked --manifest-path apps/rune/Cargo.toml
       - name: Check synthetic native scenes and interactions
-        run: node apps/rune/scripts/check-scenes.mjs
+        run: node apps/rune/scripts/check-scenes.mjs apps/rune/target/release/herune
       - name: Check composer and model picker interactions
-        run: node apps/rune/scripts/check-composer.mjs
+        run: node apps/rune/scripts/check-composer.mjs apps/rune/target/release/herune
       - name: Check independent editor ownership
-        run: node apps/rune/scripts/check-editors.mjs
+        run: node apps/rune/scripts/check-editors.mjs apps/rune/target/release/herune
       - name: Check native client settings
-        run: node apps/rune/scripts/check-client-settings.mjs
+        run: node apps/rune/scripts/check-client-settings.mjs apps/rune/target/release/herune
       - name: Check native feature pages
-        run: node apps/rune/scripts/check-pages.mjs
+        run: node apps/rune/scripts/check-pages.mjs apps/rune/target/release/herune
