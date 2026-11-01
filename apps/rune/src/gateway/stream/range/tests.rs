@@ -224,8 +224,9 @@ fn sparse_multigigabyte_media_seeks_with_bounded_lru_and_frozen_authenticated_ow
         assert_eq!(query["profile"], "research");
         assert_eq!(query["session_id"], "session-7");
         assert_eq!(query["path"], "/sandbox/audio.wav?profile=other");
-        assert_eq!(query["token"], "synthetic-token");
-        assert_eq!(query.len(), 4);
+        assert!(!query.contains_key("token"));
+        assert_eq!(headers["x-hermes-session-token"], "synthetic-token");
+        assert_eq!(query.len(), 3);
         if line.starts_with("GET ") {
             assert_eq!(headers["if-range"], "\"fixture\"");
             assert!(headers["range"].starts_with("bytes="));

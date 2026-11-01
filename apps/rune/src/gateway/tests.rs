@@ -110,7 +110,12 @@ fn remote_reads_preserve_scope_identity_and_ignore_unrelated_rpc_frames() {
         assert_eq!(params["order"], "latest");
         assert_eq!(params["include_compacted"], "true");
         assert_eq!(params["inline_images"], "false");
-        assert_eq!(params["token"], "fixture & token");
+        assert!(!params.contains_key("token"));
+        assert!(
+            header
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: fixture & token\r\n")
+        );
         http_answer(
             &mut http,
             json!({"profile":"work","session_id":"tip","messages":[

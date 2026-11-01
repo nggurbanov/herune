@@ -76,3 +76,36 @@ in `/tmp/herune-capabilities-admitted-backend-20261101/REPORT.md`.
 The isolation-corrected native run also installed fixture v1, updated it to v2,
 and removed it with an authoritative absence and closed detail. The update did
 not widen capabilities, so no additional consent override was needed.
+
+## Bounded goal handoff
+
+The everyday agent-plugin lifecycle has Linux evidence for reviewed install,
+settings, toggles, actual tool execution, process restart/readback, update and
+removal. The subsequent HTTP session-header fix passed 951 Rust tests with 15
+ignored and native stored-history reopening without HTTP 401; SDK and Bots Wry
+smokes passed on that corrected executable. The unchanged plugin update/RPC
+controller retains the earlier actual v1-to-v2 evidence. Only model completion
+was stubbed; Hermes and the plugin handler were real.
+
+This accepts the plugin goal, not the broader native harness: sidebar live
+status still reports RPC 4000 on the pinned legacy headless dispatcher. Its
+process-wide untagged list is not used as a profile-scoped substitute. The
+existing error remains explicit and needs a separate compatibility slice.
+The raw HTTP-auth manifest therefore remains partial for that additional gate.
+macOS acceptance and complete SDK/Capabilities parity remain open. See
+`capabilities-mac-handoff.md` for the receiving-lane checks and exact contract.
+
+On 2026-11-01 a follow-up fixed direct URL HTTP session-token placement: HTTP
+requests now use the sensitive `X-Hermes-Session-Token` header, while WebSocket
+requests retain their query token. The pinned backend accepted that HTTP header
+and rejected a wrong key; the isolated exact-source Rust suite passed 951 tests
+(15 ignored). A corrected Linux native binary completed a real fixture tool
+turn, reopened its stored history after Quit and a new process, and removed the
+plugin. HTTP history and roster no longer showed 401. This is **not a completed
+acceptance**: the sidebar still displayed RPC 4000 on the legacy headless
+backend. Its `session.list` contract rejects the canonical `scope` parameter;
+its alternative `session.active_list` returns untagged process-wide rows and
+cannot safely be assigned to an arbitrary profile. Evidence and the misleading
+raw harness pass flag are explained in
+`/tmp/herune-capabilities-http-auth-green-20261101/REPORT.md`. macOS, a real
+paid provider, and managed Cloud remain untested.

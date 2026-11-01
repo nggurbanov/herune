@@ -129,7 +129,12 @@ fn empty_rpc_catalog_recovers_through_same_owner_rest_without_losing_current_sel
         let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
         assert_eq!(query.get("profile").unwrap(), "work");
         assert_eq!(query.get("explicit_only").unwrap(), "1");
-        assert_eq!(query.get("token").unwrap(), "fixture catalog token");
+        assert!(!query.contains_key("token"));
+        assert!(
+            header
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: fixture catalog token")
+        );
         http_answer(&mut http, payload());
     });
     let mut gateway = Gateway::connect(&Connection::Url {

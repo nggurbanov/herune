@@ -5,7 +5,7 @@ use std::{
     net::TcpListener,
     thread,
 };
-fn request(stream: &mut TcpStream) -> (Url, Value) {
+fn request(stream: &mut TcpStream) -> (Url, Value, String) {
     let mut reader = BufReader::new(stream);
     let mut lines = vec![];
     let mut length = 0;
@@ -27,6 +27,7 @@ fn request(stream: &mut TcpStream) -> (Url, Value) {
     .unwrap();
     let mut bytes = vec![0; length];
     reader.read_exact(&mut bytes).unwrap();
+    let headers = lines.join("");
     (
         url,
         if bytes.is_empty() {
@@ -34,6 +35,7 @@ fn request(stream: &mut TcpStream) -> (Url, Value) {
         } else {
             serde_json::from_slice(&bytes).unwrap()
         },
+        headers,
     )
 }
 #[test]
@@ -44,11 +46,16 @@ fn workspace_writes_preserve_prefix_and_owner_and_do_not_echo_credentials() {
         let (stream, _) = listener.accept().unwrap();
         let _ws = tungstenite::accept(stream).unwrap();
         let (mut stream, _) = listener.accept().unwrap();
-        let (url, body) = request(&mut stream);
+        let (url, body, headers) = request(&mut stream);
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: private & token\r\n")
+        );
         assert_eq!(url.path(), "/hermes/api/config");
         let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(query["profile"], "work");
-        assert_eq!(query["token"], "private & token");
+        assert!(!query.contains_key("token"));
         assert_eq!(body, json!({"changes":{"voice.speed":1.25}}));
         write!(stream,"HTTP/1.1 403 Forbidden\r\nContent-Length: 23\r\nConnection: close\r\n\r\nprivate & token refused").unwrap();
     });
@@ -143,7 +150,7 @@ fn downloads_stream_beyond_json_limit_and_interrupted_transfers_preserve_destina
             let (stream, _) = listener.accept().unwrap();
             let _ws = tungstenite::accept(stream).unwrap();
             let (mut http, _) = listener.accept().unwrap();
-            let (url, _) = request(&mut http);
+            let (url, _, _) = request(&mut http);
             assert_eq!(url.path(), "/api/fs/download");
             let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
             assert_eq!(query["profile"], "research");
@@ -216,7 +223,10 @@ fn plugin_upload_stream_is_multipart_binary_and_keeps_authenticated_owner() {
         reader.read_exact(&mut body).unwrap();
         drop(reader);
         assert!(
-            header.starts_with("POST /prefix/api/plugins/upload?profile=research&token=fixture")
+            header.starts_with("POST /prefix/api/plugins/upload?profile=research ")
+                && header
+                    .to_ascii_lowercase()
+                    .contains("x-hermes-session-token: fixture\r\n")
         );
         assert!(
             header
@@ -263,7 +273,7 @@ fn messaging_test_preserves_business_diagnostic_while_other_refusals_fail_closed
             let (stream, _) = listener.accept().unwrap();
             let _ws = tungstenite::accept(stream).unwrap();
             let (mut http, _) = listener.accept().unwrap();
-            let (url, _) = request(&mut http);
+            let (url, _, _) = request(&mut http);
             assert_eq!(url.path(), expected);
             assert!(
                 url.query_pairs()

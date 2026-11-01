@@ -42,7 +42,12 @@ pub(super) fn history(listener: &TcpListener, messages: Value) {
     }
     assert!(headers.starts_with("GET /api/sessions/stored/messages?"));
     assert!(headers.contains("profile=work"));
-    assert!(headers.contains("token=synthetic-token"));
+    assert!(!headers.lines().next().unwrap().contains("token="));
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains("x-hermes-session-token: synthetic-token\r\n")
+    );
     let body = json!({"profile":"work","session_id":"stored","messages":messages}).to_string();
     write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
 }

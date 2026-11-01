@@ -434,14 +434,11 @@ impl PreparedTransport {
         }
         let mut headers = self.access_headers(&url)?;
         match &self.auth {
-            Auth::Token(Some(token)) if self.legacy_token() => {
+            Auth::Token(Some(token)) => {
                 if url.query_pairs().any(|(key, _)| key == "token") {
                     return Err("The route cannot replace captured gateway authentication".into());
                 }
                 headers.insert("X-Hermes-Session-Token", sensitive(token)?);
-            }
-            Auth::Token(Some(token)) => {
-                url.query_pairs_mut().append_pair("token", token);
             }
             Auth::Token(None) => {}
             #[cfg(target_os = "linux")]
@@ -739,7 +736,7 @@ mod tests {
         assert!(!format!("{connection:?}").contains("private-session-fixture"));
     }
     #[test]
-    fn old_saved_url_and_anonymous_url_keep_their_existing_authentication_contract() {
+    fn saved_and_anonymous_urls_use_http_session_headers() {
         for token in [None, Some("existing-url-fixture")] {
             let connection = Connection::Saved {
                 id: "existing".into(),
@@ -757,14 +754,13 @@ mod tests {
                     Instant::now(),
                 )
                 .unwrap();
+            assert!(!http.url.query_pairs().any(|(key, _)| key == "token"));
             assert_eq!(
-                http.url
-                    .query_pairs()
-                    .find(|(key, _)| key == "token")
-                    .map(|(_, value)| value.into_owned()),
-                token.map(str::to_owned)
+                http.headers
+                    .get("x-hermes-session-token")
+                    .map(|v| v.to_str().unwrap()),
+                token
             );
-            assert!(http.headers.is_empty());
             let captured = Connection::Routed {
                 actual: Box::new(connection),
                 owner: Arc::new(crate::source::RouteOwner::legacy("private-preserve").unwrap()),
@@ -779,7 +775,7 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(preserved.url, http.url);
-            assert!(preserved.headers.is_empty());
+            assert_eq!(preserved.headers, http.headers);
         }
         assert!(PreparedTransport::from_connection(&routed(None), Instant::now()).is_err());
         assert!(
@@ -935,6 +931,41 @@ mod cloud_policy_tests {
             transport
                 .prepare_http_method(Method::GET, url, None, Instant::now())
                 .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod direct_url_auth_regression {
+    use super::*;
+    #[test]
+    fn direct_url_uses_session_header_for_http_and_query_for_websocket() {
+        let connection = Connection::Url {
+            endpoint: "http://127.0.0.1:1234".into(),
+            token: Some("private-fixture".into()),
+        };
+        let prepared = PreparedTransport::from_connection(&connection, Instant::now()).unwrap();
+        let http = prepared
+            .prepare_http(
+                Url::parse("http://127.0.0.1:1234/api/profiles").unwrap(),
+                None,
+                Instant::now(),
+            )
+            .unwrap();
+        assert_eq!(http.headers["x-hermes-session-token"], "private-fixture");
+        assert!(!http.url.query_pairs().any(|(key, _)| key == "token"));
+        let ws = prepared
+            .prepare_ws(
+                Url::parse("ws://127.0.0.1:1234/api/ws").unwrap(),
+                None,
+                WsPurpose::Interactive,
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(
+            ws.url
+                .query_pairs()
+                .any(|(key, value)| key == "token" && value == "private-fixture")
         );
     }
 }

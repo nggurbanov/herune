@@ -424,9 +424,12 @@ fn pending_request_lifetime(invalidate_registry: bool) {
         }
         let mut body = vec![0; length];
         reader.read_exact(&mut body).unwrap();
-        assert!(headers.starts_with(
-            "POST /api/fixture-owned-write?profile=default&token=request-owner-token "
-        ));
+        assert!(headers.starts_with("POST /api/fixture-owned-write?profile=default "));
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: request-owner-token\r\n")
+        );
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&body).unwrap()["title"],
             "original-owner"

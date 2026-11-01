@@ -671,10 +671,8 @@ fn plugin_settings_secret_and_values_use_real_scoped_save_transaction() {
             url.query_pairs()
                 .any(|(key, value)| key == "profile" && value == "work")
         );
-        assert!(
-            url.query_pairs()
-                .any(|(key, value)| key == "token" && value == "fixture-token")
-        );
+        assert!(!url.query_pairs().any(|(key, _)| key == "token"));
+        let mut auth = false;
         let mut length = 0;
         loop {
             let mut line = String::new();
@@ -682,10 +680,14 @@ fn plugin_settings_secret_and_values_use_real_scoped_save_transaction() {
             if line == "\r\n" {
                 break;
             }
+            if line.to_ascii_lowercase().trim() == "x-hermes-session-token: fixture-token" {
+                auth = true;
+            }
             if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
                 length = value.trim().parse::<usize>().unwrap();
             }
         }
+        assert!(auth);
         let mut bytes = vec![0; length];
         reader.read_exact(&mut bytes).unwrap();
         let body: Value = serde_json::from_slice(&bytes).unwrap();

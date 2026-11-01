@@ -81,9 +81,14 @@ fn raw_range_and_head_preserve_auth_owner_headers_and_http_verdict() {
         assert_eq!(url.path(), "/hermes/api/files/stream");
         assert_eq!(query["profile"], "research");
         assert_eq!(query["session_id"], "stored-session");
-        assert_eq!(query["token"], "synthetic");
+        assert!(!query.contains_key("token"));
+        assert!(
+            request
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: synthetic")
+        );
         assert_eq!(query["path"], "/agent/a b.webm?profile=wrong");
-        assert_eq!(query.len(), 4);
+        assert_eq!(query.len(), 3);
         assert!(
             request
                 .to_ascii_lowercase()
