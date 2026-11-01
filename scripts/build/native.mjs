@@ -4,6 +4,15 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(fileURLToPath(new URL('../..', import.meta.url)))
 process.env.CARGO_TARGET_DIR = resolve(root, process.env.CARGO_TARGET_DIR || 'apps/rune/target')
+// Rust 1.95 can produce unloadable stripped Mach-O proc-macros: rust-lang/rust#157750.
+if (process.platform === 'darwin') {
+  process.env.MACOSX_DEPLOYMENT_TARGET ??= '13.0'
+  if (process.env.CARGO_ENCODED_RUSTFLAGS !== undefined) {
+    process.env.CARGO_ENCODED_RUSTFLAGS = [process.env.CARGO_ENCODED_RUSTFLAGS, '-Cstrip=none'].filter(Boolean).join('\x1f')
+  } else {
+    process.env.RUSTFLAGS = [process.env.RUSTFLAGS, '-Cstrip=none'].filter(Boolean).join(' ')
+  }
+}
 const [action, ...args] = process.argv.slice(2)
 const targetIndex = args.indexOf('--target')
 let target

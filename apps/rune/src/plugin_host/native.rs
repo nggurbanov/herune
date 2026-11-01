@@ -220,6 +220,11 @@ fn serve(
     html: &str,
     assets: &BTreeMap<String, String>,
 ) {
+    // Darwin inherits the listener's nonblocking flag on accepted sockets.
+    // The bounded HTTP read/write below must complete large approved assets.
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
     let mut bytes = vec![];
@@ -283,4 +288,48 @@ fn serve(
         body.len()
     );
     let _ = stream.write_all(response.as_bytes());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_server_delivers_large_module_completely() {
+        let module = "/* owned synthetic module */\n".repeat(300_000);
+        let server = Server::new(&Document {
+            title: "Synthetic asset transfer".into(),
+            html: "<!doctype html>".into(),
+            assets: BTreeMap::from([("large.js".into(), module.clone())]),
+            allow_media: false,
+        })
+        .unwrap();
+        let url = url::Url::parse(&server.root_url).unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", url.port().unwrap())).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let asset_path = url.path().replace("index.html", "large.js");
+        write!(
+            client,
+            "GET {asset_path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nConnection: close\r\n\r\n",
+            url.port().unwrap()
+        )
+        .unwrap();
+        // Model a browser that pauses before consuming a module larger than
+        // the socket send buffer. A truncated response must never look valid.
+        std::thread::sleep(Duration::from_millis(100));
+        let mut response = Vec::new();
+        client.read_to_end(&mut response).unwrap();
+        let body_start = response
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap()
+            + 4;
+        let header = std::str::from_utf8(&response[..body_start]).unwrap();
+        assert!(header.starts_with("HTTP/1.1 200 OK\r\n"));
+        assert!(header.contains(&format!("Content-Length: {}\r\n", module.len())));
+        assert_eq!(response.len() - body_start, module.len());
+        assert_eq!(&response[body_start..], module.as_bytes());
+    }
 }
