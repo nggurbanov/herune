@@ -40,8 +40,12 @@ try{
  const largeText=large.elements.find(e=>e.text?.includes(paragraph))
  assert.ok(normalText&&largeText&&largeText.rect[3]>normalText.rect[3],'text size changes actual transcript layout')
  const transparent=render('bubble-transparent',{section:'chat',events:[tap('display-bubble-100',.2),tap('page-back',.5)]})
- const bubble=base.elements.find(e=>e.key?.startsWith('body-message-')&&e.fill&&e.fill!=='#00000000')
- assert.ok(bubble&&get(transparent,bubble.key).fill.endsWith('00'),'bubble preference changes the actual message fill alpha')
+ const bubble=tree=>{
+  const content=tree.elements.find(e=>e.text?.includes(paragraph)&&!e.exiting)
+  return tree.elements.find(e=>e.key?.startsWith('body-message-')&&!e.exiting&&content?.path.startsWith(e.path+'/'))
+ }
+ assert.ok(bubble(base)&&!bubble(base).fill.endsWith('00'),'the default user message bubble is visible')
+ assert.ok(bubble(transparent)?.fill.endsWith('00'),'bubble preference changes the actual user message fill alpha')
  const collapsed=render('reasoning-collapsed',{scene:'chat-working',section:'chat',events:[tap('settings',.1),tap('display-collapse-reasoning',.4),tap('page-back',.7)]})
  assert.ok(!has(collapsed,'Checking the requested files and comparing the implementation.'),'reasoning preference folds the actual live reasoning body')
  const rebound=render('keybinding-rebound',{events:[...search('sidebar'),tap('keybind-capture-view.toggleSidebar',.4),physical('ctrl+shift+y',.6),physical('ctrl+b',.8),physical('ctrl+shift+y',1)],size:'1024x520',theme:'dark'})
