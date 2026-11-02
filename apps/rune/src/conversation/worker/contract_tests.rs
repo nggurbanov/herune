@@ -970,6 +970,112 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
 }
 
 #[test]
+fn canonical_chat_uploads_image_larger_than_five_mib() {
+    use std::io::Read;
+    let root = std::env::temp_dir().join(format!("herune-large-image-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("photo.png");
+    let mut image = vec![0x51; 7 * 1024 * 1024];
+    image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    std::fs::write(&file, &image).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let _ws = tungstenite::accept(socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut http = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                _ => return false,
+            }
+        };
+        http.set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut reader = BufReader::new(&mut http);
+        let mut headers = String::new();
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse::<usize>().unwrap();
+            }
+            headers.push_str(&line);
+        }
+        assert!(headers.starts_with("POST /api/chat/image-upload?"));
+        assert!(headers.contains("profile=work"));
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: synthetic-token\r\n")
+        );
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let encoded = body["data_url"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("data:image/png;base64,")
+            .unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap(),
+            image
+        );
+        let response = json!({"path":"/staged/photo.png","mime_type":"image/png"}).to_string();
+        write!(http,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
+        true
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let mut prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Look at this".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "photo.png".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    prepared.runtime = Some("live".into());
+    prepared.canonical = Some(true);
+    let journal = Journal::new(root.join("journal")).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    let result = worker.prepare_files(&mut prepared, &journal);
+    let received = server.join().unwrap();
+    assert!(result.is_ok(), "large image upload failed: {result:?}");
+    assert!(received, "image upload never reached the gateway");
+    assert_eq!(
+        prepared.images,
+        vec![json!({"path":"/staged/photo.png","mime":"image/png"})]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn invalid_multimodal_bytes_fail_before_any_rewind_or_admission() {
     let root = std::env::temp_dir().join(format!(
         "hermes-multimodal-refused-{}",
@@ -1313,3 +1419,90 @@ fn live_session_info_updates_clean_fields_without_inventing_a_missing_provider()
 
 #[path = "plugin_chat_tests.rs"]
 mod plugin_chat_tests;
+
+#[test]
+fn legacy_large_images_require_a_gateway_with_large_frame_support() {
+    for contract in [Some(8), None] {
+        let root =
+            std::env::temp_dir().join(format!("herune-large-legacy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("photo.png");
+        let mut image = vec![0x29; 7 * 1024 * 1024];
+        image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        std::fs::write(&path, &image).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: Some("synthetic-token".into()),
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            if let Some(version) = contract {
+                state["info"]["desktop_contract"] = json!(version);
+            }
+            answer(&mut ws, &resume, state);
+            if contract.is_none() {
+                ws.get_mut()
+                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .unwrap();
+                assert!(
+                    ws.read().is_err(),
+                    "an unknown gateway must not receive a large frame"
+                );
+                return;
+            }
+            let upload = request(&mut ws, "image.attach_bytes");
+            let encoded = upload["params"]["content_base64"].as_str().unwrap();
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+                image
+            );
+            answer(&mut ws, &upload, json!({"attached":true}));
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
+            connection: 1,
+            profile: "work".into(),
+            session: Some("stored".into()),
+        };
+        let mut prepared = Prepared::new(
+            &connection,
+            &scope,
+            SendInput {
+                text: "Look at this".into(),
+                attachments: vec![AttachmentInput {
+                    path,
+                    name: "photo.png".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        prepared.runtime = Some("live".into());
+        prepared.canonical = Some(false);
+        let journal = Journal::new(root.join("journal")).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        worker.transport.as_mut().unwrap().resume("stored").unwrap();
+        let result = worker.prepare_files(&mut prepared, &journal);
+        if contract.is_some() {
+            assert!(result.is_ok(), "modern legacy upload: {result:?}");
+        } else {
+            assert!(
+                result.is_err(),
+                "unknown legacy version must keep the old limit"
+            );
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

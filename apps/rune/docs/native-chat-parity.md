@@ -295,3 +295,23 @@ and after restart while preserving both drafts. A regression test also covers
 equal IDs in separate profiles and Telegram classification. The full Rust
 suite passed 958 tests with 15 ignored. The test fixture, red/green logs and
 limits are at `standalone-desktop-artifacts/sidebar-gui-native-20261102/`.
+
+## Larger chat images (2026-11-02)
+
+The client previously rejected every selected attachment above 5 MiB before
+upload. Images now accept up to 25 MiB through the canonical HTTP upload; a
+legacy gateway that advertises desktop contract v5 or newer also accepts that
+limit through `image.attach_bytes`. Older or unknown legacy gateways and
+non-image attachments retain the 5 MiB bound. Reads remain bounded even if a
+file changes during staging, and the larger JSON allowance applies only to the
+chat image-upload endpoint.
+
+The 7 MiB canonical upload regression failed before the change and passed
+afterward; modern and unknown legacy versions and 18 worker contracts passed.
+The full Linux test run passed 963 tests with 15 ignored. A Linux native-window
+run used the GTK file chooser, the pinned Hermes gateway and a private test
+model: a 7,684,003-byte PNG was stored by the gateway with the exact original
+SHA-256 and the chat received a reply. The tested binary SHA-256 was
+`f3849a5dae9759ffe5baee0f01f08adb7130c1673d40c12c1064fbe853f18b40`.
+This is one synthetic image and gateway, not proof for all providers or macOS.
+Evidence is in `standalone-desktop-artifacts/large-chat-image-20261102/`.

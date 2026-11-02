@@ -641,7 +641,8 @@ impl SessionTransport {
         let request = crate::pages::PageRequest::post(
             "/api/chat/image-upload",
             json!({"data_url":data_url,"filename":name}),
-        );
+        )
+        .timeout_secs(120);
         let request = self.owned_request(request);
         let value = self.gateway.page_request(&self.profile, &request)?;
         let path = required_str(&value, "path")?;

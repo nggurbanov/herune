@@ -142,7 +142,16 @@ impl Gateway {
         } else if !request.body.is_null() {
             let data =
                 serde_json::to_vec(&request.body).map_err(|_| "Invalid workspace request")?;
-            if data.len() > MAX_BODY {
+            // The chat image endpoint accepts 25 MiB of decoded image data.
+            // Keep the ordinary workspace request limit for all other routes.
+            let limit = if matches!(request.method, PageMethod::Post)
+                && request.path == "/api/chat/image-upload"
+            {
+                4 * MAX_CHAT_IMAGE_BYTES.div_ceil(3) + 64 * 1024
+            } else {
+                MAX_BODY
+            };
+            if data.len() > limit {
                 return Err("Workspace request exceeds the size limit".into());
             }
             content = Some(("application/json".into(), data));

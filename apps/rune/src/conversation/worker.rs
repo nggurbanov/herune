@@ -814,6 +814,7 @@ impl Worker {
         Ok(())
     }
     fn prepare_files(&mut self, entry: &mut Prepared, journal: &Journal) -> Result<(), CallError> {
+        use std::io::Read;
         if entry.text.is_none() {
             entry.text = Some(entry.input.text.trim().into());
             journal.save(entry)?;
@@ -824,17 +825,60 @@ impl Worker {
             .ok_or("Attach a conversation before uploading files")?;
         for index in entry.attached..entry.input.attachments.len() {
             let file = entry.input.attachments[index].clone();
-            let metadata = std::fs::metadata(&file.path)
+            let selected = std::fs::metadata(&file.path)
                 .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
-            // Bounded below the gateway's JSON frame limit after base64 expansion.
-            if !metadata.is_file() || metadata.len() > 5 * 1024 * 1024 {
-                return Err(
-                    format!("{} exceeds this gateway's 5 MB attachment limit", file.name).into(),
-                );
+            if !selected.is_file() {
+                return Err(format!("Could not read {}; select a file", file.name).into());
             }
-            let bytes =
-                std::fs::read(&file.path).map_err(|_| format!("Could not read {}", file.name))?;
+            let mut input = std::fs::File::open(&file.path)
+                .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+            let metadata = input
+                .metadata()
+                .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+            if !metadata.is_file() {
+                return Err(format!("Could not read {}; select a file", file.name).into());
+            }
+            let mut bytes = Vec::new();
+            (&mut input)
+                .take(12)
+                .read_to_end(&mut bytes)
+                .map_err(|_| format!("Could not read {}", file.name))?;
             let mime = image_mime(&bytes);
+            // Canonical images use HTTP. Contract v5 explicitly supports large
+            // WebSocket frames; older or unknown peers retain the smaller limit.
+            let supports_large_images = entry.canonical == Some(true)
+                || self
+                    .transport
+                    .as_ref()
+                    .and_then(|transport| transport.snapshot.as_ref())
+                    .and_then(|snapshot| snapshot.info.get("desktop_contract"))
+                    .and_then(Value::as_u64)
+                    .is_some_and(|version| version >= 5);
+            let limit = if mime.is_some() && supports_large_images {
+                crate::gateway::MAX_CHAT_IMAGE_BYTES
+            } else {
+                5 * 1024 * 1024
+            };
+            if metadata.len() > limit as u64 {
+                return Err(format!(
+                    "{} exceeds the {} MiB attachment limit",
+                    file.name,
+                    limit / (1024 * 1024)
+                )
+                .into());
+            }
+            input
+                .take((limit + 1 - bytes.len()) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| format!("Could not read {}", file.name))?;
+            if bytes.len() > limit {
+                return Err(format!(
+                    "{} exceeds the {} MiB attachment limit",
+                    file.name,
+                    limit / (1024 * 1024)
+                )
+                .into());
+            }
             let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
             if let Some(mime) = mime {
                 if entry.canonical == Some(true) {
