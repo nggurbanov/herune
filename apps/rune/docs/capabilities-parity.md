@@ -62,6 +62,10 @@ against a malicious plugin impersonating another plugin through raw IPC.
 The native manager and SDK adapter passed focused synthetic tests; the complete
 Linux Rust suite passed 1,017 tests with 15 ignored. Actual third-party plugins
 and macOS remain unverified for these operations.
+An isolated Linux native run also loaded a synthetic installed plugin in the
+actual SDK host and verified its private text write, read and list before and
+after a full application restart. Evidence: `standalone-desktop-artifacts/`
+`plugin-data-native-20261102/REPORT.md`.
 
 The native Plugins toolbar opens an installed-extension inventory or an explicit
 local ESM source chooser. The installed inventory reuses original disk discovery,
