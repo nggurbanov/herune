@@ -405,6 +405,164 @@ fn runtime_project_menu_exposes_set_active() {
 }
 
 #[test]
+fn entering_a_project_while_an_active_write_is_pending_keeps_the_latest_choice() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let (seen_tx, seen_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (latest_tx, latest_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let mut first = accept(&listener);
+        let request = read(&mut first);
+        assert_eq!(request["method"], "projects.set_active");
+        assert_eq!(request["params"]["id"], "first");
+        seen_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        reply(&mut first, &request, json!({"active_id":"first"}));
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    let mut socket = tungstenite::accept(stream).unwrap();
+                    let request = read(&mut socket);
+                    match request["method"].as_str().unwrap() {
+                        "projects.project_sessions" => reply(
+                            &mut socket,
+                            &request,
+                            json!({"project":{"id":"second","label":"Second"}}),
+                        ),
+                        "projects.set_active" => {
+                            assert_eq!(request["params"], json!({"profile":"work","id":"second"}));
+                            reply(&mut socket, &request, json!({"active_id":"second"}));
+                            latest_tx.send(()).unwrap();
+                            return;
+                        }
+                        other => panic!("unexpected request: {other}"),
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
+                Err(error) => panic!("accept failed: {error}"),
+            }
+        }
+    });
+    let mut v = viewer(endpoint);
+    let (owner, binding) = v.project_owner().unwrap();
+    let (ticket, _) = v
+        .fleet_state
+        .projects
+        .begin(LoadKind::Tree, &binding)
+        .unwrap();
+    assert!(v.fleet_state.projects.finish(ticket, &binding, Ok(json!({"active_id":"second","projects":[{"id":"first","label":"First"},{"id":"second","label":"Second"}]}))));
+    v.project_set_active(
+        owner.clone(),
+        Scope::All,
+        v.projects_state().generation(),
+        Some("first".into()),
+        binding,
+    );
+    seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    v.project_select(
+        owner,
+        Scope::Project("second".into()),
+        v.projects_state().generation(),
+    );
+    release_tx.send(()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(4);
+    let mut latest = false;
+    while Instant::now() < deadline && !latest {
+        v.poll_projects();
+        latest = latest_rx.try_recv().is_ok();
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    server.join().unwrap();
+    assert!(
+        latest,
+        "the later project selection must reach the captured source"
+    );
+}
+
+#[test]
+fn queued_active_choice_is_not_sent_after_an_uncertain_reply_or_owner_switch() {
+    for switch_owner in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let (seen_tx, seen_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let mut socket = accept(&listener);
+            let request = read(&mut socket);
+            assert_eq!(request["method"], "projects.set_active");
+            assert_eq!(request["params"]["id"], "first");
+            seen_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            if switch_owner {
+                reply(&mut socket, &request, json!({"active_id":"first"}));
+            }
+            drop(socket);
+            listener.set_nonblocking(true).unwrap();
+            std::thread::sleep(Duration::from_millis(400));
+            assert!(
+                matches!(listener.accept(), Err(e) if e.kind() == std::io::ErrorKind::WouldBlock)
+            );
+        });
+        let mut v = viewer(endpoint);
+        let (owner, binding) = v.project_owner().unwrap();
+        let (ticket, _) = v
+            .fleet_state
+            .projects
+            .begin(LoadKind::Tree, &binding)
+            .unwrap();
+        assert!(v.fleet_state.projects.finish(
+            ticket,
+            &binding,
+            Ok(json!({"projects":[{"id":"first","label":"First"},{"id":"second","label":"Second"}]}))
+        ));
+        let generation = v.projects_state().generation();
+        v.project_set_active(
+            owner.clone(),
+            Scope::All,
+            generation,
+            Some("first".into()),
+            binding.clone(),
+        );
+        seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        v.project_set_active(
+            owner,
+            Scope::All,
+            generation,
+            Some("second".into()),
+            binding,
+        );
+        if switch_owner {
+            v.connection = Some(Connection::Url {
+                endpoint: "http://127.0.0.1:1".into(),
+                token: Some("fixture".into()),
+            });
+            v.connection_epoch += 1;
+            seed(&mut v, "Other");
+        }
+        release_tx.send(()).unwrap();
+        wait(&mut v, |state| !state.project_active_busy());
+        assert!(
+            v.project_active_result()
+                .unwrap()
+                .contains(if switch_owner {
+                    "previous"
+                } else {
+                    "uncertain"
+                })
+        );
+        server.join().unwrap();
+    }
+}
+
+#[test]
 fn runtime_active_menu_writes_and_refreshes_then_clears() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());

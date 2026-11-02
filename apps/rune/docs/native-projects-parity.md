@@ -181,3 +181,20 @@ service was run in this pass.
 Linux tests have exercised project creation, local folder selection, and remote
 folder workflows. Native chooser and broader platform acceptance remain open;
 this work does not establish full Projects parity.
+
+### Active project selection while a write is pending (2026-11-02)
+
+Entering another project now retains the latest captured choice while a previous
+active-project write is in flight, even when the old tree still reports the later
+choice as active. After a confirmed reply, the newer choice is sent to its captured
+owner. An uncertain first result is not blindly retried for the same owner; a
+queued action for a retired owner is discarded. The response must confirm the
+requested ID. Existing source, profile and project checks remain in force.
+
+The real controller and private authenticated loopback WebSocket peer exercised
+the held-write transition, an uncertain reply and an owner switch. The earlier
+held-write regression failed before the change. The final Linux Rust suite passed
+960 tests with 15 ignored; the intermediate run had a fixture error due to
+missing project labels. No real Hermes gateway or macOS acceptance was performed
+for this increment. Logs and the bounded source patch are retained under
+`standalone-desktop-artifacts/project-active-queue-20261102/`.

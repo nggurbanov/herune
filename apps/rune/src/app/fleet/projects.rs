@@ -164,7 +164,8 @@ impl Viewer {
         self.fleet_state.projects.select(scope.clone());
         if let Scope::Project(id) = &scope {
             let should_activate = self.fleet_state.projects.tree.as_ref().is_some_and(|tree| {
-                tree.active_id.as_deref() != Some(id.as_str())
+                (self.fleet_state.project_active_pending.is_some()
+                    || tree.active_id.as_deref() != Some(id.as_str()))
                     && tree
                         .projects
                         .iter()

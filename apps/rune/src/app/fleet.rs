@@ -43,6 +43,7 @@ pub(super) struct State {
     project_folders_serial: u64,
     project_active_network: crate::pages::PageNetwork,
     project_active_pending: Option<projects::active::Receipt>,
+    project_active_queued: Option<projects::active::Intent>,
     project_active_result: Option<String>,
     project_active_refresh: Option<crate::projects::Owner>,
     project_rename_network: crate::pages::PageNetwork,
