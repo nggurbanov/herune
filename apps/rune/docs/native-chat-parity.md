@@ -6,6 +6,13 @@ This is a working migration increment; complete chat parity remains in progress.
 
 ## Implemented
 
+- Bot Chat lookup retries the exact-title, hidden-session read without the newer
+  `scope` parameter only when an older gateway explicitly rejects that parameter.
+  The retry retains the original profile; other failures still prevent creating a
+  duplicate chat. A Linux native test against pinned Hermes `ef75bc7088`, with a
+  private two-profile home and a local synthetic model, verified both chats,
+  separate histories and draft retention across bot switches. Actual model
+  providers and macOS were not tested in this run.
 - Stored display rows preserve complete server payloads and durable row IDs.
   Native projection renders ordered text, Markdown/code/tables, readable thought
   disclosures, tool calls with arguments/results, image parts and file actions.

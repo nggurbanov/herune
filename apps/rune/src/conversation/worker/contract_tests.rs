@@ -436,6 +436,44 @@ fn uncertain_ack_retries_the_same_admission_without_creating_a_second_chat_or_bu
 }
 
 #[test]
+fn bot_registry_retries_legacy_title_lookup_without_changing_profile() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let first = request(&mut ws, "session.list");
+        assert_eq!(first["params"]["scope"], "stored");
+        ws.send(Message::Text(json!({"jsonrpc":"2.0","id":first["id"],"error":{"code":4000,"message":"invalid params for session.list: scope: Extra inputs are not permitted"}}).to_string().into())).unwrap();
+        let retry = request(&mut ws, "session.list");
+        assert!(retry["params"].get("scope").is_none());
+        assert_eq!(retry["params"]["title"], "Bot Chat");
+        assert_eq!(retry["params"]["include_hidden"], true);
+        answer(
+            &mut ws,
+            &retry,
+            json!({"sessions":[{"id":"root","resolved_id":"tip","title":"Bot Chat"}]}),
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let (mut worker, _) = worker(connection, scope);
+    assert_eq!(worker.bot_registry().unwrap().as_deref(), Some("tip"));
+    server.join().unwrap();
+}
+
+#[test]
 fn bot_registry_failure_is_not_permission_to_create_a_fork() {
     let root =
         std::env::temp_dir().join(format!("hermes-rune-bot-registry-{}", uuid::Uuid::new_v4()));

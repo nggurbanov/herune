@@ -481,10 +481,27 @@ impl Worker {
         Ok(())
     }
     fn bot_registry(&mut self) -> Result<Option<String>, CallError> {
-        let value = self.transport()?.call(
+        let result = self.transport()?.call(
             "session.list",
             json!({"scope":"stored","title":"Bot Chat","include_hidden":true,"limit":200}),
-        )?;
+        );
+        let value = match result {
+            // Older Hermes versions perform an exact, durable title lookup but
+            // reject the newer scope parameter. Never retry an uncertain call.
+            Err(error)
+                if !error.uncertain
+                    && error.code == Some(4000)
+                    && error
+                        .message
+                        .contains("scope: Extra inputs are not permitted") =>
+            {
+                self.transport()?.call(
+                    "session.list",
+                    json!({"title":"Bot Chat","include_hidden":true,"limit":200}),
+                )?
+            }
+            other => other?,
+        };
         let rows = value
             .get("sessions")
             .and_then(Value::as_array)
