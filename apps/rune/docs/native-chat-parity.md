@@ -223,6 +223,13 @@ model request instead of the main stream and is not used as proof. Compact
 native evidence is retained locally at
 `standalone-desktop-artifacts/reconnect-native-20261102/`.
 
+A later Linux native run disconnected a private TCP relay while the real pinned
+Hermes gateway and synthetic model continued the active turn. The model finished
+while the client was offline; after the relay returned, the same session showed
+the complete reply and accepted a follow-up without resending the first prompt.
+This covers one profile and a short outage, not a gateway restart, real provider
+or macOS. Evidence: `standalone-desktop-artifacts/network-recovery-native-20261102/`.
+
 ## Short journal transactions and model selection
 
 A journal state read and an owning send could contend for the same short-lived
