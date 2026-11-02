@@ -576,7 +576,26 @@ The exact-source Linux Rust suite passed 1,026 tests with 16 ignored. The standa
 `npm run test:rune` passed before the final notice and profile-filter changes;
 the final exact-source run used the restored, unchanged SDK assets.
 
-This does not establish a native full-app search against a real Hermes backend,
-macOS acceptance, exhaustive multi-profile search within one source, or results
-in Project grouping when its project overview replaces the recents list. Gateways
-without the search endpoint continue to search only currently loaded rows.
+That initial checkpoint did not establish native full-app search, macOS
+acceptance, or multi-profile search within one source. Gateways without the
+search endpoint continue to search only currently loaded rows.
+
+The follow-up searches each visible selected profile separately, preserving source,
+profile and NativeSelf ownership even when sessions share an ID. An unavailable
+profile does not erase successful results from the others. Root-owned search
+results can be opened with their captured authority; their context actions are
+not yet enabled. The app currently does not separately query a root and Backend
+profile when both have the same displayed name.
+
+A Linux native-window test used the actual pinned Hermes gateway with a private
+database containing 65 newer conversations and one older conversation. The
+older conversation was initially outside the loaded list; searching its message
+text found and opened it without sending a model prompt. Evidence is in
+`standalone-desktop-artifacts/sidebar-search-native-20261102/result.json`;
+the tested app SHA-256 was
+`ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`.
+A separate in-process route test exercised real Hermes SQLite searches with
+injected profile routing. The standard test command and a repeat against the
+restored host assets each passed 1,031 tests, with 16 ignored. This does not
+establish native multi-profile or macOS acceptance, nor project-overview search
+results.

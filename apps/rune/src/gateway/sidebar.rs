@@ -15,6 +15,9 @@ pub struct SidebarSession {
     /// Native fetch provenance. Agent JSON cannot grant a desktop source identity.
     #[serde(skip)]
     pub provenance: Option<SourceStamp>,
+    /// Native-local ownership is assigned by the verified request, never by agent JSON.
+    #[serde(skip)]
+    pub profile_intent: crate::source::ProfileIntent,
     pub source: Option<String>,
     pub started_at: f64,
     pub last_active: f64,
@@ -71,7 +74,7 @@ impl SidebarSession {
     pub fn owner(&self) -> Option<SessionOwner> {
         self.provenance
             .clone()
-            .map(|source| SessionOwner::new(source, self.profile()))
+            .map(|source| SessionOwner::with_intent(source, self.profile(), self.profile_intent))
     }
     pub fn session_ref(&self) -> Option<SessionRef> {
         self.owner().map(|owner| owner.session(&self.id))

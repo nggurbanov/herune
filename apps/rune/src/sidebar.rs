@@ -663,18 +663,17 @@ impl SidebarState {
             .collect()
     }
     pub fn status(&self, row: &SidebarSession) -> Status {
-        for alias in row
-            .aliases()
-            .into_iter()
-            .filter(|_| row.provenance.as_ref() == self.source.as_ref())
-        {
+        for alias in row.aliases().into_iter().filter(|_| {
+            row.profile_intent.is_backend() && row.provenance.as_ref() == self.source.as_ref()
+        }) {
             if let Some(status) = self.live.get(&(row.profile().into(), alias.into())) {
                 if *status != Status::Idle {
                     return *status;
                 }
             }
         }
-        if row.provenance.as_ref() == self.source.as_ref()
+        if row.profile_intent.is_backend()
+            && row.provenance.as_ref() == self.source.as_ref()
             && row.aliases().into_iter().any(|id| {
                 self.retained_running
                     .contains(&(row.profile().to_owned(), id.to_owned()))
@@ -799,6 +798,7 @@ impl SidebarState {
             let Some(parent) = self.all_rows().into_iter().find(|candidate| {
                 candidate.provenance == current.provenance
                     && candidate.profile() == current.profile()
+                    && candidate.profile_intent == current.profile_intent
                     && candidate.aliases().contains(&parent)
                     && candidate.key() != current.key()
             }) else {
@@ -831,7 +831,10 @@ impl SidebarState {
         if self.source.as_ref() != Some(&owner.source) {
             return None;
         }
-        self.find(&owner.profile, id)
+        self.all_rows()
+            .into_iter()
+            .find(|row| row.owner().as_ref() == Some(owner) && row.aliases().contains(&id))
+            .cloned()
     }
     pub fn set_partition_preferences(&mut self, preferences: &Preferences) {
         self.partition_preferences = true;
@@ -938,7 +941,8 @@ impl SidebarState {
                     .all_rows()
                     .into_iter()
                     .filter(|r| {
-                        r.unread == Some(true)
+                        r.profile_intent.is_backend()
+                            && r.unread == Some(true)
                             && seen.insert(r.key())
                             && (self
                                 .source
@@ -1163,6 +1167,10 @@ impl SidebarState {
         })
     }
     fn prepare(&mut self, mutation: Mutation) -> Vec<PageEffect> {
+        if !mutation.session.profile_intent.is_backend() {
+            self.notice = Some("Open this local conversation before using its actions.".into());
+            return vec![];
+        }
         if self.demo || self.mutation_inflight {
             return vec![];
         }
@@ -1308,8 +1316,8 @@ impl SidebarState {
         ]
     }
     pub fn apply(&mut self, op: &str, result: Result<Value, String>) -> Vec<PageEffect> {
-        if op == "sidebar.search" {
-            self.apply_search(result);
+        if op == "sidebar.search" || op.starts_with("sidebar.search.") {
+            self.apply_search(op, result);
             return vec![];
         }
         let refreshes_recents = matches!(op, "sidebar.batch" | "sidebar.recents");
@@ -1822,6 +1830,7 @@ pub fn date_rows(rows: Vec<&SidebarSession>, now: f64) -> Vec<ListRow> {
                 rows.iter().any(|candidate| {
                     candidate.provenance == row.provenance
                         && candidate.profile() == row.profile()
+                        && candidate.profile_intent == row.profile_intent
                         && candidate.aliases().contains(&parent)
                         && candidate.key() != row.key()
                 })

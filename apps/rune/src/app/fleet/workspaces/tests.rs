@@ -330,3 +330,76 @@ fn server_search_hit_renders_in_existing_sidebar() {
         "server hit should be visible in the existing sidebar"
     );
 }
+
+#[test]
+fn root_owned_search_result_opens_with_root_intent_and_does_not_mutate_a_named_profile() {
+    use crate::gateway::{
+        BackendRootProof,
+        prepared::{BackendTarget, SelectedContext, WirePolicy},
+        route,
+    };
+    use crate::source::ProfileIntent;
+    let policy = route::ProfilePolicy::new("default", route::RouteOptions::default()).unwrap();
+    let policy = WirePolicy::token(policy, Default::default())
+        .unwrap()
+        .with_selected(
+            SelectedContext::new(
+                "default",
+                BackendTarget::Root(BackendRootProof {
+                    profile: None,
+                    profile_id: "/private/root".into(),
+                    instance_id: "fixture-instance".into(),
+                    authority_epoch: 7,
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let connection = Connection::Routed {
+        actual: Box::new(connection("root")),
+        policy: std::sync::Arc::new(policy),
+        owner: std::sync::Arc::new(crate::source::RouteOwner::legacy("search-root-test").unwrap()),
+    };
+    let actor = crate::connections::TestLegacyRig::new();
+    let lease = crate::connections::TestRoutedLease::new(connection.clone());
+    let mut s = viewer();
+    s.connection = Some(connection);
+    s.retain_window_route(actor.resolver(), lease.lease.clone());
+    let binding = s.current_source_binding().unwrap();
+    s.sidebar_state
+        .bind_source_at(&binding, s.connection_epoch, std::env::temp_dir())
+        .unwrap();
+    s.profile_intent = ProfileIntent::NativeSelf;
+    let targets = vec![("default".to_owned(), true)];
+    s.sidebar_state
+        .search_profiles_tick("needle", 1.0, targets.clone());
+    let (_, _, effects) = s.sidebar_state.search_profiles_tick("needle", 1.3, targets);
+    s.sidebar_state.apply(&effects[0].0, Ok(serde_json::json!({"results":[{"id":"root-result","session_id":"root-result","profile":"default","title":"Root result","started_at":1,"last_active":1,"message_count":3}]})));
+    let row = s
+        .sidebar_state
+        .recents
+        .rows
+        .iter()
+        .find(|row| row.id == "root-result")
+        .unwrap();
+    let owner = row.owner().unwrap();
+    assert_eq!(owner.profile_intent, ProfileIntent::NativeSelf);
+    s.sidebar_action_owned(
+        owner.clone(),
+        crate::sidebar::Action::Pin("default".into(), "root-result".into(), true),
+    );
+    assert!(s.sidebar_state.mutation.is_none());
+    assert!(
+        s.sidebar_state
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("Open this local conversation")
+    );
+    s.sidebar_action_owned(
+        owner,
+        crate::sidebar::Action::Open("default".into(), "root-result".into()),
+    );
+    assert_eq!(s.selected_session.as_deref(), Some("root-result"));
+    assert_eq!(s.profile_intent, ProfileIntent::NativeSelf);
+}
