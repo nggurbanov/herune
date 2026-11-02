@@ -299,3 +299,34 @@ fn parked_approval_binding_requires_live_exact_source_and_runtime() {
         .insert((scope.connection, scope.profile.clone()));
     assert!(s.parked_notice_binding(&scope, "same").is_none());
 }
+
+#[test]
+fn server_search_hit_renders_in_existing_sidebar() {
+    use rune::{Env, Runtime};
+    let mut s = viewer();
+    s.sidebar_state.bind_connection_at(
+        s.connection.as_ref().unwrap(),
+        s.connection_epoch,
+        std::env::temp_dir(),
+    );
+    s.sidebar_state.prefs.grouping = crate::sidebar::Grouping::None;
+    s.sidebar_state.prefs.collapsed.clear();
+    s.search.replace_text("needle");
+    s.sidebar_state.search_tick("needle", 1.0, false);
+    s.sidebar_state.search_tick("needle", 1.3, false);
+    s.sidebar_state.apply("sidebar.search", Ok(serde_json::json!({"results":[{"id":"old","session_id":"old","profile":"default","title":"Older conversation","started_at":1,"last_active":1,"message_count":3}]})));
+    let row = s
+        .sidebar_state
+        .recents
+        .rows
+        .iter()
+        .find(|row| row.id == "old")
+        .unwrap();
+    let key = format!("session-{}", row.key());
+    let mut runtime = Runtime::new(s, crate::view::app, (1200., 800.), Env::new(true, 1.));
+    runtime.frame(1.0);
+    assert!(
+        runtime.find(&key).is_some(),
+        "server hit should be visible in the existing sidebar"
+    );
+}

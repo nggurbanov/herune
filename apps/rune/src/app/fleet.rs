@@ -378,7 +378,59 @@ impl Viewer {
             self.sync_fleet_partitions();
             changed = true;
         }
+        let search = self.search.text.clone();
+        let profile_filter = self.sidebar_state.prefs.profiles.clone();
+        if visible && self.connection.is_some() && self.page_owner_ready() {
+            let active_query = if profile_filter.is_empty()
+                || profile_filter.contains(&self.sidebar_state.owner_profile)
+            {
+                &search
+            } else {
+                ""
+            };
+            let (search_changed, delay, effects) = self.sidebar_state.search_tick(
+                active_query,
+                now,
+                self.profile_intent == crate::source::ProfileIntent::NativeSelf,
+            );
+            changed |= search_changed;
+            if let Some(delay) = delay {
+                tx.wake_after(delay);
+            }
+            self.page_requests(effects);
+        }
+        let active_source = self
+            .connection
+            .as_ref()
+            .and_then(|c| SourceStamp::from_connection(c).ok());
+        let searchable_sources = self
+            .fleet_state
+            .partitions
+            .values()
+            .filter(|partition| {
+                (profile_filter.is_empty()
+                    || profile_filter.contains(&partition.state().owner_profile))
+                    && self.sidebar_profile_visible(
+                        partition.stamp(),
+                        &partition.state().owner_profile,
+                    )
+            })
+            .map(|partition| partition.stamp().key())
+            .collect::<std::collections::HashSet<_>>();
         for partition in self.fleet_state.partitions.values_mut() {
+            if visible && active_source.as_ref() != Some(partition.stamp()) {
+                // Never send the search text to a hidden agent or profile.
+                let query = if searchable_sources.contains(&partition.stamp().key()) {
+                    &search
+                } else {
+                    ""
+                };
+                let (search_changed, delay) = partition.search(query, now);
+                changed |= search_changed;
+                if let Some(delay) = delay {
+                    tx.wake_after(delay);
+                }
+            }
             changed |= partition.poll(now);
         }
         changed |= self.poll_projects();

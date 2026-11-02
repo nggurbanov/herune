@@ -192,7 +192,7 @@ impl Viewer {
                     self.profile_intent,
                 ))
     }
-    fn page_owner_ready(&self) -> bool {
+    pub(crate) fn page_owner_ready(&self) -> bool {
         self.fixture
             || (self.page_connection_accepted()
                 && self.page_loaded_owner.as_ref()

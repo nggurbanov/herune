@@ -10,6 +10,7 @@ pub mod fleet;
 mod owned_tests;
 mod persistence;
 mod receipt;
+mod search;
 #[cfg(test)]
 mod tests;
 use rune::TextEdit;
@@ -266,6 +267,7 @@ pub struct SidebarState {
     receipt_store: Option<receipt::Store>,
     partition_preferences: bool,
     canonical_profiles: BTreeMap<String, BTreeSet<String>>,
+    search: search::Search,
 }
 impl Default for SidebarState {
     fn default() -> Self {
@@ -276,6 +278,7 @@ impl SidebarState {
     pub fn new() -> Self {
         Self {
             prefs: Preferences::default(),
+            search: search::Search::default(),
             preferences_storage: Default::default(),
             owner_profile: "default".into(),
             owner_connection: 0,
@@ -482,6 +485,8 @@ impl SidebarState {
         Ok(())
     }
     pub fn reset_data(&mut self) {
+        self.search.clear_warning(&mut self.notice);
+        self.search = search::Search::default();
         self.recents = Slice::default();
         self.messaging = Slice::default();
         self.cron_sessions = Slice::default();
@@ -736,7 +741,8 @@ impl SidebarState {
                 source_label(row.source.as_deref().unwrap_or_default())
             )
             .to_lowercase()
-            .contains(&query))
+            .contains(&query)
+            || self.search.matches(row, &query))
             && (!row.archived || self.prefs.archived)
             && (self.prefs.status.is_empty()
                 || self.prefs.status.contains(self.status(row).label()))
@@ -845,6 +851,7 @@ impl SidebarState {
         match action {
             Action::Refresh => {
                 self.live_unsupported.clear();
+                self.search.retry(self.clock);
                 let profile = self.owner_profile.clone();
                 self.load(&profile)
             }
@@ -1301,6 +1308,22 @@ impl SidebarState {
         ]
     }
     pub fn apply(&mut self, op: &str, result: Result<Value, String>) -> Vec<PageEffect> {
+        if op == "sidebar.search" {
+            self.apply_search(result);
+            return vec![];
+        }
+        let refreshes_recents = matches!(op, "sidebar.batch" | "sidebar.recents");
+        if refreshes_recents {
+            self.search.unproject(&mut self.recents);
+        }
+        let effects = self.apply_inner(op, result);
+        if refreshes_recents {
+            self.search
+                .project(&mut self.recents, &self.messaging, &self.cron_sessions);
+        }
+        effects
+    }
+    fn apply_inner(&mut self, op: &str, result: Result<Value, String>) -> Vec<PageEffect> {
         self.pending.remove(op);
         let key = op.strip_prefix("sidebar.").unwrap_or(op);
         if key == "mutation" || key == "snapshot" {

@@ -557,3 +557,26 @@ that the live event is not duplicated; it does not establish native or
 real-provider acceptance. The first unrestricted common run had an unrelated
 220 ms cloud deadline assertion fail; that test passed in isolation and the
 full retry passed with four test threads (1010 passed, 15 ignored).
+
+### Sidebar search across stored conversations (2026-11-02)
+
+The existing sidebar search also asks each visible, selected source for
+`/api/sessions/search`, scoped to that sidebar's owner profile. Matching old
+sessions are projected into the existing list while the query is present; local
+rows are restored after clearing it. The query is debounced, and page-network
+request identity, source stamps and profile checks fence late or foreign results.
+Hidden profile filters prevent dispatch to excluded profiles. A failed or missing
+endpoint leaves local filtering in place and reports that full-history search is
+unavailable. Refresh retries it.
+
+A loopback authenticated HTTP test verified the request, a Unicode query and
+profile scope; state tests cover stale and foreign results, refresh and clearing;
+a mounted Rune Runtime test verified a returned row in the existing sidebar.
+The exact-source Linux Rust suite passed 1,026 tests with 16 ignored. The standard
+`npm run test:rune` passed before the final notice and profile-filter changes;
+the final exact-source run used the restored, unchanged SDK assets.
+
+This does not establish a native full-app search against a real Hermes backend,
+macOS acceptance, exhaustive multi-profile search within one source, or results
+in Project grouping when its project overview replaces the recents list. Gateways
+without the search endpoint continue to search only currently loaded rows.

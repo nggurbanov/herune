@@ -132,6 +132,14 @@ impl SourceSidebar {
         let effects = self.state.action(action);
         self.dispatch(effects);
     }
+    pub fn search(&mut self, query: &str, now: f64) -> (bool, Option<std::time::Duration>) {
+        if self.retired {
+            return (false, None);
+        }
+        let (changed, delay, effects) = self.state.search_tick(query, now, false);
+        self.dispatch(effects);
+        (changed, delay)
+    }
     fn dispatch(&mut self, effects: Vec<PageEffect>) {
         for (operation, request) in effects {
             let result = self.binding.request(request).and_then(|request| {
