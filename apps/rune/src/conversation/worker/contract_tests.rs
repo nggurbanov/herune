@@ -1722,3 +1722,214 @@ fn oversized_legacy_attachment_is_rejected_before_policy_or_upload_and_retained(
     server.join().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn legacy_idle_proof_requires_one_exact_empty_runtime() {
+    let row = json!({"id":"live","session_key":"stored","status":"idle","message_count":0});
+    assert!(exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[row.clone()]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "other",
+        "stored",
+        &json!({"sessions":[row.clone()]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "other",
+        &json!({"sessions":[row.clone()]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[row.clone(),row]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[{"id":"live","session_key":"stored","status":"working","message_count":0}]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[{"id":"live","session_key":"stored","status":"idle","message_count":1}]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[{"id":"live","session_key":"stored","status":"idle"}]}),
+        "idle"
+    ));
+}
+#[test]
+fn retry_of_unpersisted_legacy_attachment_uses_only_confirmed_idle_runtime() {
+    let root = std::env::temp_dir().join(format!("herune-lazy-retry-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        state.as_object_mut().unwrap().remove("running");
+        answer(&mut ws, &resume, state);
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"starting","message_count":0,"preview":""}]}),
+        );
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"idle","message_count":0}]}),
+        );
+        let upload = request(&mut ws, "file.attach");
+        answer(
+            &mut ws,
+            &upload,
+            json!({"attached":true,"ref_text":"@file:note.txt"}),
+        );
+        let prompt = request(&mut ws, "prompt.submit");
+        assert_eq!(
+            prompt["params"]["text"],
+            "@file:note.txt\n\nRetry this message"
+        );
+        answer(&mut ws, &prompt, json!({"status":"streaming"}));
+    });
+    let fresh = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: None,
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Retry this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, replies) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    assert!(worker.submit(entry, &journal).unwrap().is_none());
+    assert!(
+        replies
+            .try_iter()
+            .any(|reply| matches!(reply, Reply::Admitted { id: sent, .. } if sent == id))
+    );
+    assert!(
+        journal.load(&id).is_err(),
+        "accepted send must retire the saved intent"
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn previously_attempted_legacy_send_still_reads_authoritative_history() {
+    let root = std::env::temp_dir().join(format!("herune-lazy-attempted-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        answer(&mut ws, &resume, state);
+        history(&listener, json!([]));
+        let upload = request(&mut ws, "file.attach");
+        answer(
+            &mut ws,
+            &upload,
+            json!({"attached":true,"ref_text":"@file:note.txt"}),
+        );
+        let prompt = request(&mut ws, "prompt.submit");
+        answer(&mut ws, &prompt, json!({"status":"streaming"}));
+    });
+    let fresh = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: None,
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Retry this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    entry.attempted = true;
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    assert!(worker.submit(entry, &journal).unwrap().is_none());
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

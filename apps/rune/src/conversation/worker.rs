@@ -360,9 +360,63 @@ impl Worker {
                 return Ok(Some(message));
             }
         }
-        if created && !canonical {
+        let retrying_empty_legacy = !created
+            && !canonical
+            && entry.session.is_none()
+            && entry.stored.as_deref() == Some(snapshot.stored.as_str())
+            && !entry.attempted
+            && !entry.legacy_attempted
+            && entry.input.rewind.is_none()
+            && entry.input.replay.is_none()
+            && snapshot.info.get("lazy").and_then(Value::as_bool) == Some(true)
+            && snapshot.info.get("profile_name").and_then(Value::as_str)
+                == Some(self.scope.profile.as_str())
+            && snapshot
+                .metadata
+                .get("message_count")
+                .and_then(Value::as_u64)
+                == Some(0)
+            && snapshot.messages.is_empty()
+            && !snapshot.running
+            && snapshot.metadata.get("queued").is_none()
+            && snapshot.metadata.get("inflight").is_none();
+        let empty_live = if retrying_empty_legacy {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match self.transport()?.call("session.active_list", json!({})) {
+                    Ok(value)
+                        if exact_legacy_status(
+                            &snapshot.runtime,
+                            &snapshot.stored,
+                            &value,
+                            "idle",
+                        ) =>
+                    {
+                        break true;
+                    }
+                    Ok(value)
+                        if Instant::now() < deadline
+                            && exact_legacy_status(
+                                &snapshot.runtime,
+                                &snapshot.stored,
+                                &value,
+                                "starting",
+                            ) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    Ok(_) => break false,
+                    // An unsupported proof keeps the normal history path; an uncertain failure stops.
+                    Err(error) if error.code.is_some() && !error.uncertain => break false,
+                    Err(error) => return Err(error),
+                }
+            }
+        } else {
+            false
+        };
+        if (created && !canonical) || empty_live {
             // Legacy create is lazy: the first real user prompt materializes
-            // its row. Reading that not-yet-existent row would abort the send.
+            // its row. An explicitly verified idle retry is still that empty row.
             self.publish_snapshot(
                 snapshot.clone(),
                 History {
@@ -1447,6 +1501,23 @@ fn admission_status(value: &Value, runtime: &str, canonical: bool) -> Result<Str
     }
     .into())
 }
+fn exact_legacy_status(runtime: &str, stored: &str, value: &Value, status: &str) -> bool {
+    let Some(rows) = value.get("sessions").and_then(Value::as_array) else {
+        return false;
+    };
+    let mut matches = rows
+        .iter()
+        .filter(|row| row.get("id").and_then(Value::as_str) == Some(runtime));
+    let Some(row) = matches.next() else {
+        return false;
+    };
+    matches.next().is_none()
+        && row.get("session_key").and_then(Value::as_str) == Some(stored)
+        && row.get("status").and_then(Value::as_str) == Some(status)
+        && row.get("message_count").and_then(Value::as_u64) == Some(0)
+        && (status != "starting" || row.get("preview").and_then(Value::as_str) == Some(""))
+}
+
 fn validate_transfer_limits(
     attachments: &[AttachmentInput],
     large_frames: bool,

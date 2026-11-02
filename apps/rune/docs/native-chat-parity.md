@@ -390,3 +390,13 @@ and a new Bot Chat. An unmodified v8 gateway accepted a 6 MiB file byte-for-byte
 The final source suite passed 970 tests, with 15 ignored. These checks do not
 establish macOS or real-provider behavior. Evidence:
 `standalone-desktop-artifacts/attachment-draft-preflight-20261102/`.
+
+A legacy new-chat send interrupted during its first attachment upload can now be
+retried when the same profile's resumed runtime is proven empty and idle. If
+agent initialization is still starting, the worker waits briefly for that proof;
+otherwise it retains the normal history check. Previously attempted sends never
+use this shortcut. Linux native verification cut the first upload before the
+pinned Hermes gateway, then retried through the UI: the file bytes and text
+arrived, one user message was stored, and the synthetic local model replied.
+This does not establish macOS or real-provider behavior. Evidence:
+`standalone-desktop-artifacts/attachment-retry-native-20261102/`.
