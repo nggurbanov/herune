@@ -51,6 +51,56 @@ it('reconnects a retained owner with a fresh receipt without replaying an interr
   } finally { pool.close(); remove(); bridge.close() }
 }, 8000)
 
+it('opens the primary gateway after it was unavailable at plugin startup', async () => {
+  const frames: any[] = []; const states: string[] = []; let bridge: NativeBridge; let attempts = 0
+  const send = (message: unknown) => window.dispatchEvent(new CustomEvent('hermes-host-message', {detail: message}))
+  bridge = new NativeBridge({postMessage: raw => { const m = JSON.parse(raw); frames.push(m); queueMicrotask(() => {
+    if (m.kind === 'plugin-gateway-prepare') {
+      if (++attempts === 1) bridge.receive({type:'plugin-response',id:m.id,error:'gateway unavailable'})
+      else bridge.receive({type:'plugin-response',id:m.id,value:{url:'ws://hermes-native-gateway.invalid/r2'}})
+    } else if (m.kind === 'plugin-socket-open') {
+      bridge.receive({type:'plugin-response',id:m.id,value:{}}); send({type:'plugin-socket',receipt:'r2',event:'open',data:{}})
+    } else if (m.kind === 'plugin-socket-send') {
+      bridge.receive({type:'plugin-response',id:m.id,value:{}}); const f = JSON.parse(m.payload.frame.text)
+      if (f.id !== undefined) send({type:'plugin-socket',receipt:'r2',event:'message',data:{text:JSON.stringify({jsonrpc:'2.0',id:f.id,result:{ok:true}})}})
+    } else bridge.receive({type:'plugin-response',id:m.id,value:{}})
+  }) }})
+  bridge.setOwner({connection_id:'a',profile:'default'}); const remove = installNativeSockets(bridge)
+  const pool = createGatewayPool(bridge, () => {}, state => states.push(state))
+  try {
+    let connected = false; let failure: unknown
+    const owner = {connection_id:'a',profile:'default'}
+    const opening = pool.connectPrimary(owner).then(() => { connected = true }, error => { failure = error })
+    owner.connection_id = 'mutated'; owner.profile = 'other'
+    await vi.waitFor(() => expect(connected).toBe(true), {timeout:3500})
+    await opening
+    expect(failure).toBeUndefined(); expect(attempts).toBe(2)
+    expect(states).toContain('error'); expect(states.at(-1)).toBe('open')
+    await expect(pool.request({connection_id:'a',profile:'default'},'session.list',{})).resolves.toEqual({ok:true})
+    expect(frames.filter(m => m.kind === 'plugin-gateway-prepare').map(m => m.payload)).toEqual([{connectionId:'a',profile:'default'},{connectionId:'a',profile:'default'}])
+  } finally { pool.close(); remove(); bridge.close() }
+}, 5000)
+
+it('does not revive a failed startup after its owner or pool is retired', async () => {
+  let bridge: NativeBridge; let attempts = 0
+  bridge = new NativeBridge({postMessage: raw => { const m = JSON.parse(raw); if (m.kind === 'plugin-gateway-prepare') { attempts++; queueMicrotask(() => bridge.receive({type:'plugin-response',id:m.id,error:'offline'})) } }})
+  bridge.setOwner({connection_id:'a',profile:'default'})
+  const states: string[] = []; const pool = createGatewayPool(bridge, () => {}, state => states.push(state))
+  try {
+    const opening = pool.connectPrimary({connection_id:'a',profile:'default'})
+    const retired = expect(opening).rejects.toThrow('lease expired')
+    await vi.waitFor(() => expect(states).toContain('error'))
+    bridge.setOwner({connection_id:'b',profile:'default'})
+    await retired; expect(attempts).toBe(1)
+    const second = createGatewayPool(bridge, () => {}, state => states.push(state))
+    const retrying = second.connectPrimary({connection_id:'b',profile:'default'})
+    const closed = expect(retrying).rejects.toThrow('pool is closed')
+    await vi.waitFor(() => expect(attempts).toBe(2))
+    second.close(); await closed
+    await new Promise(resolve => setTimeout(resolve,1200)); expect(attempts).toBe(2)
+  } finally { pool.close(); bridge.close() }
+}, 5000)
+
 it('retries a failed redial and stops when its owner changes', async () => {
   let bridge: NativeBridge; let receipt = 0; let failRedial = true
   const send = (message: unknown) => window.dispatchEvent(new CustomEvent('hermes-host-message', {detail: message}))

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "source_head": "320b92d688ef83ba762ae81321e3a85b25cd1206",
+  "source_head": "7eed08cb7270c301be1779c69da05d5ecbdb06e1",
   "build_command": "node apps/rune/scripts/build-plugin-host.mjs",
   "node": "v26.13.0",
   "source_inputs": {
@@ -140,7 +140,7 @@
     "packages/native-plugin-host/src/fonts/JetBrainsMono-Italic.woff2": "9f158b85eca345daeee01dfffa602709a905ea08b0cc60dbf6153cbbd97da08f",
     "packages/native-plugin-host/src/fonts/JetBrainsMono-Regular.woff2": "f1a7a03672cdd494ce0d5543fac6e4360fe22403c6de297fdc2e55a815f7baff",
     "packages/native-plugin-host/src/fonts/OFL-JetBrainsMono.txt": "a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697",
-    "packages/native-plugin-host/src/gateway.ts": "ccbd2c67d7d16ce36a7aec42110cef9a743daf2c511f4b002f7fdfe7e3685e9e",
+    "packages/native-plugin-host/src/gateway.ts": "dd422f4ae040c9a22196a788f5397b77e791d7058696307473cb83204cf794e9",
     "packages/native-plugin-host/src/host-views.tsx": "9aa40945be571d142dba76c1b9de1fdc16ab8f9bd47469c8727284528a09e680",
     "packages/native-plugin-host/src/host.tsx": "17f382e967f008cf8f3d392e8fc62bfcfcbe72e9fc2eba66719e0ad73695a658",
     "packages/native-plugin-host/src/i18n/en_app_tour.ts": "56510a275b0430f3be7eb61bbdc2fbff0e57d9f24a124b819c9348eff3a06be6",
@@ -2271,8 +2271,8 @@
   ],
   "assets": {
     "host.js": {
-      "bytes": 663710,
-      "sha256": "4615399137a11d6e0ba1298acea0a05d9b03e07f7e9c8f2f748082f0fe1526ec"
+      "bytes": 664334,
+      "sha256": "b46fd23a2f7003a3804897adb9846a0aae43bb61a2e1403809304f0b2057a69e"
     },
     "chunk-D32TOXHM-CrYSND-0.js": {
       "bytes": 654485,
@@ -2313,8 +2313,8 @@
   },
   "archive": {
     "file": "assets.json.gz",
-    "bytes": 2059241,
-    "sha256": "44d6a01f96eec845d9d474b11b35c09e8e67cde4ed71fb0e458713526b2f854c"
+    "bytes": 2059380,
+    "sha256": "146588ee9e0bc4490d31fcac4e4460192fceb046e816cf15be602dbdc4f5b9df"
   },
   "notices": {
     "file": "THIRD_PARTY_LICENSES.txt",
@@ -2322,7 +2322,7 @@
   },
   "preserved_assets": {
     "host.css": {
-      "from": "320b92d688ef83ba762ae81321e3a85b25cd1206:apps/rune/assets/plugin-host/assets.json.gz",
+      "from": "7eed08cb7270c301be1779c69da05d5ecbdb06e1:apps/rune/assets/plugin-host/assets.json.gz",
       "reason": "Keep existing styling; stale local node_modules changed font embedding during regeneration."
     }
   }

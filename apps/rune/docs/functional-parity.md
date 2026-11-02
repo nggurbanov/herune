@@ -55,13 +55,18 @@ relay, file grants and preview execution remain unavailable in these native
 views. The native toolbar does not yet apply plugin workspace scope, and platform
 acceptance remains open. For an already connected plugin gateway, the host now
 requests a fresh owner-bound socket after a disconnect with bounded backoff;
-interrupted requests are not resent. Synthetic host tests cover reconnection,
-failed redial and owner retirement; real backend and macOS recovery remain
-unverified. The 2026-11-02 Linux host, SDK and Bots suites passed, as did
+interrupted requests are not resent. The host also retries a failed initial
+connection, retaining the original owner and stopping when its pool or owner
+retires. Synthetic host tests cover initial failure, reconnection, failed redial
+and owner retirement. A Linux native WebView test loaded the bundled Bots pane
+after an initial synthetic gateway failure. Real backend and macOS recovery
+remain unverified. The 2026-11-02 Linux host, SDK and Bots suites passed, as did
 the 957-test Rust suite and a synthetic native WebView smoke. The Rust run used
 the freshly generated stylesheet; the final host archive retains the prior
 stylesheet byte-for-byte because a stale local dependency changed font embedding.
-The reconnect behavior itself was tested separately from that stylesheet.
+The final owner-capture guard was added after that Rust run began; it was verified in
+the host tests and rebuilt native WebView bundle, not a new Rust run. The
+reconnect behavior itself was tested separately from the stylesheet.
 The SDK model catalog
 menu exports are not yet ported. These are parity gaps, not proof that the
 Electron workflows were preserved. Plugin-originated workspace changes use
