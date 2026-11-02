@@ -434,3 +434,16 @@ v2, v5 and v8, as well as the unchanged v1/unknown direct-upload behavior. A
 Linux native run used pinned v8 Hermes with its reported contract changed to v2
 by a private test relay; it is not an actual v2-server or macOS acceptance.
 Evidence: `standalone-desktop-artifacts/image-retry-v2-20261102/`.
+
+### Model choice while two chats are active (2026-11-02)
+
+A Linux native-window check used the pinned Hermes gateway and a private
+synthetic model endpoint with two models. Two stored conversations streamed in
+parallel. While the first was running, the user selected the second model,
+switched to the other conversation and back, then sent the next message. It
+reached the second model; the other conversation remained on the first model.
+Another run queued the next message before the first stream finished and saw
+the same result while the second conversation continued. Each relevant model
+request occurred once. The first fixture attempt missed composer focus; it was
+corrected and rerun. No client code changed. This is not real-provider or macOS
+acceptance. Evidence: `standalone-desktop-artifacts/parallel-model-choice-20261102/`.
