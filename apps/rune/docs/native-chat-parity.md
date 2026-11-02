@@ -461,3 +461,14 @@ not a crash, missing source files, macOS or another provider. The executable
 was `4f1205aed8e64b73b78e44f697d79e630df943016544341831406691d7546a70`, built
 from the source preceding `fd931b1a92` with its same client changes. Evidence:
 `standalone-desktop-artifacts/draft-attachments-native-20261102/`.
+
+### Clipboard screenshots (2026-11-02)
+
+Image paste into the native composer is missing. A Linux native-window run
+confirmed that a real image was present on a private GTK clipboard, but pasting
+into the focused composer produced no attachment; the existing text remained.
+This is an open everyday workflow, not a macOS result. Rune's clipboard hooks
+can carry image content, but the composer has no such hook. Persisting pasted
+images must preserve the captured editor and its draft across restarts. The
+shared composer view requires coordination with the Mac lane. Evidence:
+`standalone-desktop-artifacts/clipboard-image-native-20261102/REPORT.md`.
