@@ -52,6 +52,17 @@ Desktop contract; this is process/error isolation, not a new restricted plugin
 language. Native parent authority never sends a token, gateway URL, cookie or
 native ticket into JavaScript.
 
+The native SDK provides `ctx.files.dataFolder` text read/write, listing and
+stat on Unix using a per-plugin private directory. The native file operations
+reject path traversal, symbolic-link traversal, hard-linked files and oversized
+text. This is a bounded subset: arbitrary user folder grants, image data URLs,
+rename, trash and Windows file operations are not implemented. Desktop plugins
+remain trusted executable code; the per-plugin directory is not a sandbox
+against a malicious plugin impersonating another plugin through raw IPC.
+The native manager and SDK adapter passed focused synthetic tests; the complete
+Linux Rust suite passed 1,017 tests with 15 ignored. Actual third-party plugins
+and macOS remain unverified for these operations.
+
 The native Plugins toolbar opens an installed-extension inventory or an explicit
 local ESM source chooser. The installed inventory reuses original disk discovery,
 package opt-in decisions, enable/disable and hot reload. Backend file/directory

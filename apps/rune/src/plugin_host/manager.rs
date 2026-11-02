@@ -1,6 +1,7 @@
 //! Every child request remains bound to the parent-selected gateway principal.
 use super::*;
 mod ambient;
+mod files;
 mod journal;
 mod notifications;
 mod storage;
@@ -825,6 +826,10 @@ impl PluginHosts {
                                     }
                                 });
                         self.reply(&id, result);
+                    } else if kind == "plugin-data-file" {
+                        let running = self.running.as_ref().unwrap();
+                        let result = files::run(&running.storage_path, &payload);
+                        self.reply(&id, Ok(result));
                     } else if kind == "adopt-sdk-route" {
                         let running = self.running.as_mut().unwrap();
                         if payload["clientOwner"]["connection_id"] != running.request_source
@@ -1442,6 +1447,64 @@ fn prepare_plugin_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_data_requests_round_trip_through_native_host() {
+        use std::sync::{Arc, Mutex};
+        let dir =
+            std::env::temp_dir().join(format!("herune-plugin-file-host-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("plugin-storage")).unwrap();
+        let fixture = Arc::new(Mutex::new(FixtureProcess {
+            alive: true,
+            ..Default::default()
+        }));
+        let owned = fixture.clone();
+        let mut host = PluginHosts::new();
+        host.spawn_fixture = Some(Box::new(move || Ok(ManagedProcess::Fixture(owned.clone()))));
+        let connection = Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        };
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "default".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: None,
+        };
+        host.launch(
+            "fixture-document".into(),
+            "fixture-origin".into(),
+            scope.clone(),
+            &connection,
+            None,
+            json!({"profiles":[{"name":"default"}]}),
+        )
+        .unwrap();
+        host.running.as_mut().unwrap().storage_path = dir.join("plugin-storage/source.json");
+        for (op, id) in [
+            ("writeText", uuid::Uuid::new_v4().to_string()),
+            ("readText", uuid::Uuid::new_v4().to_string()),
+        ] {
+            fixture.lock().unwrap().events.push(Ok(json!({"type":"plugin-request","id":id,"kind":"plugin-data-file","payload":{"pluginId":"test.plugin","op":op,"folder":"data","path":"note.txt","text":"persisted"}})));
+            host.poll(&scope, &connection);
+            let response = fixture
+                .lock()
+                .unwrap()
+                .commands
+                .iter()
+                .find(|v| v["id"] == id)
+                .cloned()
+                .unwrap();
+            assert_eq!(response["value"]["ok"], true);
+            if op == "readText" {
+                assert_eq!(response["value"]["text"], "persisted");
+            }
+        }
+        host.close();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn two_plugin_windows_flush_disjoint_changes_when_they_close() {

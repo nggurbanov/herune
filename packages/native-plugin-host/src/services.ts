@@ -102,6 +102,7 @@ export function createNativeServices(bridge: NativeBridge, storage: Storage) {
     createDoors(id, _capabilities, track) {
       const unavailable = (name: string): never => { throw new Error(`Native plugin capability unavailable: ${name}`) }
       const invoke = async (kind: string, payload: object) => { const result = await bridge.ask<{ok?: boolean}>(kind, { ...payload, pluginId: id }); return result?.ok === true }
+      const file = <T extends object>(op: string, folder: string, path = '', extra: object = {}) => bridge.ask<import('../../plugin-sdk/src/plugin-contract').PluginFilesResult<T>>('plugin-data-file', { pluginId: id, op, folder, path, ...extra })
       return {
         rest: (path, options = {}) => {
           if (!path.startsWith('/') || path.startsWith('//') || path.includes('..') || path.includes('\\') || path.includes('#')) throw new Error('Invalid plugin REST path')
@@ -120,7 +121,7 @@ export function createNativeServices(bridge: NativeBridge, storage: Storage) {
         preview: { isAvailable: () => false, executeJavaScript: async () => unavailable('preview.executeJavaScript') },
         files: {
           dataFolder: 'data', requestFolder: async () => unavailable('files.requestFolder'), folders: async () => unavailable('files.folders'), release: async () => unavailable('files.release'),
-          list: async () => unavailable('files.list'), stat: async () => unavailable('files.stat'), readText: async () => unavailable('files.readText'), readDataUrl: async () => unavailable('files.readDataUrl'), writeText: async () => unavailable('files.writeText'), rename: async () => unavailable('files.rename'), trash: async () => unavailable('files.trash')
+          list: (folder, path) => file('list', folder, path), stat: (folder, path) => file('stat', folder, path), readText: (folder, path) => file('readText', folder, path), readDataUrl: async () => unavailable('files.readDataUrl'), writeText: (folder, path, text, options) => file('writeText', folder, path, { text, exclusive: options?.exclusive ?? false }), rename: async () => unavailable('files.rename'), trash: async () => unavailable('files.trash')
         }, i18n: i18n.plugin(id)
       }
     },
