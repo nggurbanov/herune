@@ -480,7 +480,12 @@ export async function deleteBot(bot: RosterRow) {
 
   // Both ids: the marker may have been filed under either tip of the chat's
   // compression lineage.
-  forgetSessionUnread([bot.canonical_session?.id, bot.canonical_session?.resolved_id], bot.name)
+  try {
+    forgetSessionUnread([bot.canonical_session?.id, bot.canonical_session?.resolved_id], bot.name)
+  } catch {
+    // The backend deletion already succeeded; finish retiring local state even if unread is unavailable.
+    console.warn('Deleted bot unread state could not be cleared')
+  }
   rosterWatermarks.delete(botSelectionKey(bot))
   avatarFetchInflight.delete(botMetaKey(bot))
   avatarFaceOnly.delete(botMetaKey(bot))

@@ -24,3 +24,25 @@ it('cancels the actual Bots deferred routines callback before host uninstall', a
   try { plugin.register(instance.context); instance.dispose(); uninstall(); expect(()=>vi.advanceTimersByTime(0)).not.toThrow() }
   finally { instance.dispose(); uninstall(); bridge.close(); vi.useRealTimers() }
 }, 20000)
+
+it('keeps actual Bots activity notices working when native unread hooks are absent', async () => {
+  const bridge = new NativeBridge({ postMessage: () => {} })
+  const services = createNativeServices(bridge, localStorage)
+  services.hydrate({ connection_id: 'a', profile: 'default', profiles: ['default', 'work'] })
+  const uninstall = installHostServices(services.host)
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  try {
+    expect(services.host.markSessionUnreadFinished).toBeUndefined()
+    const { trackInboundActivity, $activityToasts } = await import('../../builtin-bots/src/roster-actions')
+    const bot = { name: 'work', canonical_session: { id: 'work-chat', last_active: 10, preview: 'first' } }
+    $activityToasts.set(true)
+    trackInboundActivity([bot])
+    expect(() => trackInboundActivity([{ ...bot, canonical_session: { ...bot.canonical_session, last_active: 20, preview: 'new message' } }])).not.toThrow()
+    expect(services.notices.get().some(notice => notice.message === 'new message')).toBe(true)
+  } finally {
+    services.disposeNotices()
+    uninstall()
+    bridge.close()
+    warn.mockRestore()
+  }
+})

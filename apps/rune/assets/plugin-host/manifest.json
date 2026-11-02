@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "source_head": "7ee79d4b3a0465ad55a2d46164f0f413ffbc1e11",
+  "source_head": "3b5538dfa8283e4f381267a5b070b8e43e2a8aaf",
   "build_command": "node apps/rune/scripts/build-plugin-host.mjs",
   "node": "v24.15.0",
   "source_inputs": {
@@ -100,11 +100,11 @@
     "packages/builtin-bots/src/pet.tsx": "ceb07a70e978ca0ca0aa26249f1a9ee5310a545ad69c48decfb8c9b6c3102352",
     "packages/builtin-bots/src/plugin.tsx": "46708f729835f705d3b39bd6cc8162278377f75787a4a8f80408ccad93855214",
     "packages/builtin-bots/src/profile-config.tsx": "d817d53ac6b1839f383e1e3014cbb64c19daac471f02d147a7b152404cb7f7b1",
-    "packages/builtin-bots/src/profile-ops.ts": "9a4598790ec744673645c4ed74a3d2b7b10809c6fbe5c5702bb2c0b8dcf3bbc6",
+    "packages/builtin-bots/src/profile-ops.ts": "7647bd293e1b5c34b499e5859d7fdde8d181a0c8c28d8b22665d847f6baf6b8a",
     "packages/builtin-bots/src/recent-session.ts": "755ecc39632b362b6d3a05d2a7af39cf9fef56a8b8f8f402ed6c4b1b77275ccf",
     "packages/builtin-bots/src/relay-budget.ts": "a9fa2ed2ab1bae7ca6749347944b041b01c36ae58bb5ba57977d51819068bb7d",
     "packages/builtin-bots/src/relay.ts": "ed33552be0a03aba49709aee248a19b5394ef101ee61b9c82c247b32c1cd95c4",
-    "packages/builtin-bots/src/roster-actions.ts": "945f0a1ca0a2c53bb773bb239c975dc583a1de7ba5c3fe2ce9da8aba8a34c08a",
+    "packages/builtin-bots/src/roster-actions.ts": "41ccdd7722190f07b657c78cce6d17dfa6e1299aca3dc57ed45f67f2aa599f84",
     "packages/builtin-bots/src/roster-pane-content.tsx": "d906dee7f3b03d5b1f4c8017484eef45de3ae941d26682ab3b34282cb8eb3820",
     "packages/builtin-bots/src/roster-pane-derivation.ts": "d3f362d6587fa3bd9ba64620321fa5e27939e6abb9f019df31550a023c2d1573",
     "packages/builtin-bots/src/roster-pane-dialogs.tsx": "51f973c68e91858839c62c8c345f3ae11a4bf0baccb809a79c66f2ddf8a7f65b",
@@ -2272,7 +2272,7 @@
   "assets": {
     "host.js": {
       "bytes": 664622,
-      "sha256": "4c66c6478079748d4804cfb44b3da9ec119daf42153795e828d19f911cd112b2"
+      "sha256": "08cc3c5b42a7647e03f175da237147c3dab63d2a4a8d6580bd8a7ab96cd363fa"
     },
     "chunk-D32TOXHM-CrYSND-0.js": {
       "bytes": 654485,
@@ -2286,17 +2286,17 @@
       "bytes": 61,
       "sha256": "adcc8c28ff7f5846cf4a4645faf8534386823c7d56d84bb1c70e30f184208cd5"
     },
-    "plugin-BVk4cQHw.js": {
-      "bytes": 387503,
-      "sha256": "45ab84e11d8793a1cbea22b6dec60dc8967da411de6532ccc4dff3a46763d73c"
+    "plugin-xX1ceHQt.js": {
+      "bytes": 387592,
+      "sha256": "d3736484152761ce1362f480609ae7dc4b8ebcf9b93425193922ee310791afe4"
     },
-    "profile-ops-An0ISqWc.js": {
-      "bytes": 150329,
-      "sha256": "62a6248ddd95c67d547a1258e3e838cf9453c302e2dbd2e2344f19f4fe5ad2e6"
-    },
-    "profile-ops-BCOx9qs6.js": {
+    "profile-ops-Cu_Kfui7.js": {
       "bytes": 66,
-      "sha256": "18f71d3b44775f84ec06906787e379523a9264ce2c455126cf4611594eb847e1"
+      "sha256": "ed0b9972ad7d61b91ba8914e480af7b2e535e1c5f4266f420633d6dee889e056"
+    },
+    "profile-ops-Dj9qoYEe.js": {
+      "bytes": 150417,
+      "sha256": "ddf6302059f45898a4dea9ef3463ef5f508ae592bc2373baad548d53134d2d52"
     },
     "rfb-BLe_zAOa.js": {
       "bytes": 236738,
@@ -2313,8 +2313,8 @@
   },
   "archive": {
     "file": "assets.json.gz",
-    "bytes": 2059479,
-    "sha256": "082f4fb103e960b67fc3831e38f5e5408adf9434ad00d3e16bb9d8469f928996"
+    "bytes": 2059531,
+    "sha256": "b32f3bef4c09bb3c369b64c53807d9ee25ec7b8eaaee59f3c89d3a3f26f85872"
   },
   "notices": {
     "file": "THIRD_PARTY_LICENSES.txt",
