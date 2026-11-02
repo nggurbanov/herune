@@ -316,6 +316,7 @@ impl Viewer {
                             self.history_loading = false;
                         }
                         self.refresh_chat_search();
+                        self.continue_history_search();
                     }
                 }
                 Update::AttachmentsReady {

@@ -472,3 +472,24 @@ can carry image content, but the composer has no such hook. Persisting pasted
 images must preserve the captured editor and its draft across restarts. The
 shared composer view requires coordination with the Mac lane. Evidence:
 `standalone-desktop-artifacts/clipboard-image-native-20261102/REPORT.md`.
+
+### Search in older conversation history (2026-11-02)
+
+When a search has no loaded match, Enter requests earlier history. Previous-match
+navigation at the first loaded hit also checks earlier pages. Pages are fetched
+sequentially for the captured conversation and query, stopping on a match,
+error, cancellation or the end of history. Each action reads at most eight
+pages; another action continues from the loaded boundary. The existing search
+interface is unchanged. After a prepend, the client waits for layout before
+scrolling to and highlighting the hit.
+
+A private Linux native-window check used the pinned Hermes backend and a seeded
+521-message conversation. The old executable could not find a phrase outside
+its latest 500 messages; the new executable loaded and visibly highlighted it
+without sending a prompt. The first new-executable run loaded the page but
+failed to reveal the virtual row; the corrected run passed. A mounted Runtime
+regression exercises that transition, and controller tests cover a multi-page
+scan, source/query retirement, error handling and the page bound. The final
+Rust suite passed 997 tests, with 15 ignored. This does not establish macOS
+acceptance or search in messages beyond the per-action bound without repeating
+the action. Evidence: `standalone-desktop-artifacts/history-search-native-20261102/`.

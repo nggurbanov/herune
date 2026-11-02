@@ -274,6 +274,50 @@ impl Conversation {
             .unwrap_or_else(|| scope.clone())
     }
     #[cfg(test)]
+    pub(crate) fn fixture_history_reader(
+        &mut self,
+        scope: &DraftScope,
+        messages: Vec<HistoryMessage>,
+        cursor: usize,
+    ) -> std::sync::mpsc::Receiver<(String, usize)> {
+        let (send, receive) = std::sync::mpsc::channel();
+        let (observed, requests) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(command) = receive.recv() {
+                if let worker::Command::Older { stored, cursor } = command {
+                    let _ = observed.send((stored, cursor));
+                }
+            }
+        });
+        self.workers.insert(scope.clone(), send);
+        self.views.insert(
+            scope.clone(),
+            ConversationView {
+                stored: scope.session.clone().unwrap(),
+                messages,
+                truncated: true,
+                history_cursor: cursor,
+                ..Default::default()
+            },
+        );
+        requests
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_history_reply(
+        &self,
+        scope: &DraftScope,
+        cursor: usize,
+        result: Result<crate::gateway::History, String>,
+    ) {
+        self.replies
+            .send(worker::Reply::Older {
+                origin: scope.clone(),
+                cursor,
+                result: result.map_err(Into::into),
+            })
+            .unwrap();
+    }
+    #[cfg(test)]
     pub(crate) fn fixture_attachments_ready(&self, origin: DraftScope, id: &str) {
         self.replies
             .send(worker::Reply::AttachmentsReady {
