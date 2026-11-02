@@ -40,3 +40,16 @@ it('reports an optional identity trace only when the host provides it', () => {
     expect(trace).toHaveBeenCalledWith('bots', 'id', 'event')
   } finally { present() }
 })
+
+it('reports browser-only profile cleanup only when the host provides it', () => {
+  const absent = installHostServices({ registerContribution: () => () => {} })
+  try {
+    expect(host.dropLeftoverProfilePrefs).toBeUndefined()
+  } finally { absent() }
+  const cleanup = vi.fn()
+  const present = installHostServices({ registerContribution: () => () => {}, dropLeftoverProfilePrefs: cleanup })
+  try {
+    host.dropLeftoverProfilePrefs?.('work', 'source-a')
+    expect(cleanup).toHaveBeenCalledWith('work', 'source-a')
+  } finally { present() }
+})

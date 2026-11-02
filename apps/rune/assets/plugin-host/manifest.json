@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "source_head": "9497d77ad2b4320d00804e9b3d1afd4d01f0fcfe",
+  "source_head": "2a44d50083f65654d52da5a6550a0ece4103bdd7",
   "build_command": "node apps/rune/scripts/build-plugin-host.mjs",
   "node": "v24.15.0",
   "source_inputs": {
@@ -206,7 +206,7 @@
     "packages/plugin-sdk/src/host-helpers.ts": "5a4160e3e3bee66aa70d8d38aeb0835d29c1e22695ddad47c896f56a5fedad38",
     "packages/plugin-sdk/src/host-types.ts": "9e4cdb30e5105c0a5f7ecb4d64ad66e3988e24d04f9d1ec6fc0dbbc706e47129",
     "packages/plugin-sdk/src/host-ui.tsx": "bd1bbb2dab842acfb1f42b350b832c92d8b18195827299554cfc264eb09f3510",
-    "packages/plugin-sdk/src/host.ts": "474a7af8e65244a04562c586d53385a28bf988e871cf5694c9195762563f8a64",
+    "packages/plugin-sdk/src/host.ts": "10aa2637b21f9f9c5b222c13f88e1395cb360daeb034716dd6934f87442d606e",
     "packages/plugin-sdk/src/i18n/localized-tab-title.tsx": "55f5d6751cd753c671c5c6c5864376d00decc74fee97601b37a2407c48d904d5",
     "packages/plugin-sdk/src/i18n/ports.ts": "4dcfd80fa6ad937da067ecc42fd246c75f199845d104747fa15e8dc3be2cae78",
     "packages/plugin-sdk/src/i18n/types_app_tour.ts": "7baa8b0684c870d1bd232095ab786557d20600e200638bb00652bf1c32452352",
@@ -2272,7 +2272,7 @@
   "assets": {
     "host.js": {
       "bytes": 664622,
-      "sha256": "dfd52ab325f9b70dd906d653c291401ce9ff57923e3ed0fe60df68e887155867"
+      "sha256": "d3beee4b1ef794fb43d71008c5e3cac332a2047115f8535703bd68e383ebdcd4"
     },
     "chunk-D32TOXHM-CrYSND-0.js": {
       "bytes": 654485,
@@ -2286,25 +2286,25 @@
       "bytes": 61,
       "sha256": "adcc8c28ff7f5846cf4a4645faf8534386823c7d56d84bb1c70e30f184208cd5"
     },
-    "plugin-8Gddf3_E.js": {
+    "plugin-BmejoCRZ.js": {
       "bytes": 387592,
-      "sha256": "a8aeba1e2fbd5faeb98464d5d29e29ceb970988a3a994f262370652f79f0db05"
+      "sha256": "d9c7206e9382b3b74392c223131dab553e29be47a96373053b3450d02aa0f0e4"
     },
-    "profile-ops-BxPGOl-q.js": {
-      "bytes": 66,
-      "sha256": "6433738ccefea0c795cc404846754bc3970fcb8d1e7536abb304bbbcb686e122"
-    },
-    "profile-ops-OMwuwsjS.js": {
+    "profile-ops-B-7acKk0.js": {
       "bytes": 150417,
-      "sha256": "4c93571cb768cdb2b508c0ee41b5723cdc92a1b42d7a083525f4e31da426dbb7"
+      "sha256": "b9d1f2c9048afcd1b177c388138c08439b081d08ae66c8c4317bdcecefe91257"
+    },
+    "profile-ops-BsNErqY3.js": {
+      "bytes": 66,
+      "sha256": "ec5a05e50cb07ed5139514ccbbf18507799a2e9158a29adf523c4934c1218714"
     },
     "rfb-BLe_zAOa.js": {
       "bytes": 236738,
       "sha256": "b3ebc462ce1e1eca0d838f5eb010b0a772fb5b741e32327f6763450b41e11630"
     },
-    "src-iVFQ1kGs.js": {
-      "bytes": 511352,
-      "sha256": "924f94907a0b736e6e9a00fdd47ea7ddf97cac33a4649fe4aa445b4dcfeb5cc6"
+    "src-sEcoLhFA.js": {
+      "bytes": 511346,
+      "sha256": "b9a7b1ad6f6dc8fa944c56ae98b5baf2134e16f46d68629d2e12f54ae765873b"
     },
     "host.css": {
       "bytes": 2202796,
@@ -2313,8 +2313,8 @@
   },
   "archive": {
     "file": "assets.json.gz",
-    "bytes": 2059536,
-    "sha256": "d2ba6951a1f6fd9dda4a1b1af79306ce66565ae434b1624dccc5a8277332d048"
+    "bytes": 2059528,
+    "sha256": "a7450504191e1b7a7267577aa6e4d9641f8b84facc7ad05882b5e9518c0d9868"
   },
   "notices": {
     "file": "THIRD_PARTY_LICENSES.txt",

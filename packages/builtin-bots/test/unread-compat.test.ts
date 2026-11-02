@@ -60,3 +60,23 @@ it('does not retire a bot when its backend deletion fails', async () => {
     expect($selectedBot.get()).toBe(key)
   } finally { uninstall() }
 })
+
+it('duplicates a bot exactly once when browser-only profile cleanup is unavailable', async () => {
+  const requestAgent = vi.fn(async (_source: string, _profile: string, method: string) => {
+    if (method === 'profiles.list') return { profiles: [{ name: 'work' }] }
+    if (method === 'profiles.create') return { ok: true, name: 'work-2' }
+    throw new Error(`unexpected ${method}`)
+  })
+  const uninstall = installHostServices({ registerContribution: () => () => {}, state, profileRequests: {
+    requestAgent, requestProfile: async () => { throw new Error('wrong route') }, profileNames: () => []
+  } })
+  try {
+    const { duplicateBot } = await import('../src/profile-ops')
+    const { $botMeta } = await import('../src/data')
+    $botMeta.set({})
+    const bot = { name: 'work', connectionId: 'source-a', connectionKind: 'remote', sourceScoped: true, targetProfile: 'work' }
+    await expect(duplicateBot(bot, [bot])).resolves.toBe('work-2')
+    expect(requestAgent.mock.calls.filter(call => call[2] === 'profiles.create')).toHaveLength(1)
+    expect(requestAgent.mock.calls.every(call => call[0] === 'source-a' && call[1] === 'work')).toBe(true)
+  } finally { uninstall() }
+})

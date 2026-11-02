@@ -35,7 +35,7 @@ export const host = {
   setWorkspaceScope(mode: WorkspaceMode, ownerKey: null | string = null, target: WorkspaceNewSessionTarget | null = null) { return requireCapability('setWorkspaceScope')(mode, ownerKey, target) },
   setWorkspaceScopeAsync(mode: WorkspaceMode, ownerKey: null | string = null, target: WorkspaceNewSessionTarget | null = null) { return requireCapability('setWorkspaceScopeAsync')(mode, ownerKey, target) },
   setWorkspaceOwnerLabel(ownerKey: string, label: string) { return requireCapability('setWorkspaceOwnerLabel')(ownerKey, label) },
-  dropLeftoverProfilePrefs(profile: string, connectionId?: null | string) { return requireCapability('dropLeftoverProfilePrefs')(profile, connectionId) },
+  get dropLeftoverProfilePrefs() { return getHostServices().dropLeftoverProfilePrefs },
   get traceIdentityChange() { return getHostServices().traceIdentityChange },
   async deleteProfile(profile: string | PluginProfileRoute) { return requireCapability('deleteProfile')(profile) },
   async listPersistedSessions(route: PluginProfileRoute | null, options: { profile: string; limit?: number }) { return requireCapability('listPersistedSessions')(route, options) },

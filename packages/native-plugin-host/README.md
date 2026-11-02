@@ -15,3 +15,9 @@ profile deletion to the native host.
 The SDK exposes the identity-tracing callback only when the native host actually
 provides it. Bots can therefore update roster metadata without a diagnostics
 facility; this does not add native profile creation or deletion support.
+
+The browser-only `dropLeftoverProfilePrefs` capability is optional. The native
+host does not provide it, so creating or duplicating a bot proceeds without a
+browser preference cleanup step. This does not clear native persisted drafts
+for a profile deleted and recreated outside the application; native profile
+deletion and that cleanup remain separate work.

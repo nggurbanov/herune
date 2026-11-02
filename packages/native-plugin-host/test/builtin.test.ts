@@ -7,6 +7,7 @@ import {queryClient} from '../../plugin-sdk/src/lib/query-client'
 import {installHostServices} from '../../plugin-sdk/src/services'
 import {createPluginContext} from '../../plugin-sdk/src/plugin-runtime/context'
 import {NativeBridge} from '../src/bridge'
+import {installNativeSockets} from '../src/socket'
 import {createNativeServices} from '../src/services'
 it('registers and disposes the actual Bots plugin under native services', async () => {
   const bridge=new NativeBridge({postMessage:s=>{const m=JSON.parse(s);if(m.id)queueMicrotask(()=>bridge.receive({type:'plugin-response',id:m.id,error:'synthetic offline'}))}})
@@ -64,3 +65,45 @@ it('updates actual Bots metadata when the native host has no identity trace', as
     bridge.close()
   }
 })
+
+
+it('duplicates a source-owned bot through native services without browser-only cleanup', async () => {
+  const frames: any[] = []
+  let bridge: NativeBridge
+  const send = (message: unknown) => window.dispatchEvent(new CustomEvent('hermes-host-message', {detail: message}))
+  bridge = new NativeBridge({postMessage: raw => {
+    const message = JSON.parse(raw); frames.push(message)
+    queueMicrotask(() => {
+      if (message.kind === 'plugin-gateway-prepare') bridge.receive({type:'plugin-response', id:message.id, value:{url:'ws://hermes-native-gateway.invalid/r1'}})
+      else if (message.kind === 'plugin-socket-open') { bridge.receive({type:'plugin-response', id:message.id, value:{}}); send({type:'plugin-socket', receipt:'r1', event:'open', data:{}}) }
+      else if (message.kind === 'plugin-socket-send') {
+        bridge.receive({type:'plugin-response', id:message.id, value:{}})
+        const request = JSON.parse(message.payload.frame.text)
+        const result = request.method === 'profiles.list' ? {profiles:[{name:'work'}]} : {ok:true,name:'work-2'}
+        if (request.id != null) send({type:'plugin-socket',receipt:'r1',event:'message',data:{text:JSON.stringify({jsonrpc:'2.0',id:request.id,result})}})
+      } else bridge.receive({type:'plugin-response',id:message.id,value:{}})
+    })
+  }})
+  const services = createNativeServices(bridge, localStorage)
+  services.hydrate({connection_id:'a',profile:'default',profiles:['default','work']})
+  const removeSockets = installNativeSockets(bridge)
+  const uninstall = installHostServices(services.host)
+  try {
+    expect(services.host.dropLeftoverProfilePrefs).toBeUndefined()
+    const { duplicateBot } = await import('../../builtin-bots/src/profile-ops')
+    const { $botMeta } = await import('../../builtin-bots/src/data')
+    $botMeta.set({})
+    const bot = {name:'work',connectionId:'a',connectionKind:'remote',sourceScoped:true,targetProfile:'work'}
+    await expect(duplicateBot(bot, [bot])).resolves.toBe('work-2')
+    const rpc = frames.filter(m => m.kind === 'plugin-socket-send').map(m => JSON.parse(m.payload.frame.text))
+    expect(rpc.filter(m => m.method === 'profiles.create')).toHaveLength(1)
+    expect(rpc.find(m => m.method === 'profiles.create')?.params).toMatchObject({profile:'work',name:'work-2',clone_from:'work'})
+    expect(frames.find(m => m.kind === 'plugin-gateway-prepare')?.payload).toMatchObject({connectionId:'a',profile:'work'})
+  } finally {
+    services.pool.close()
+    services.disposeNotices()
+    uninstall()
+    removeSockets()
+    bridge.close()
+  }
+}, 15000)
