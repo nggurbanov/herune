@@ -301,8 +301,8 @@ limits are at `standalone-desktop-artifacts/sidebar-gui-native-20261102/`.
 The client previously rejected every selected attachment above 5 MiB before
 upload. Images now accept up to 25 MiB through the canonical HTTP upload; a
 legacy gateway that advertises desktop contract v5 or newer also accepts that
-limit through `image.attach_bytes`. Older or unknown legacy gateways and
-non-image attachments retain the 5 MiB bound. Reads remain bounded even if a
+limit through `image.attach_bytes`. At that checkpoint, older or unknown legacy
+gateways and non-image attachments retained the 5 MiB bound. Reads remain bounded even if a
 file changes during staging, and the larger JSON allowance applies only to the
 chat image-upload endpoint.
 
@@ -315,3 +315,21 @@ SHA-256 and the chat received a reply. The tested binary SHA-256 was
 `f3849a5dae9759ffe5baee0f01f08adb7130c1673d40c12c1064fbe853f18b40`.
 This is one synthetic image and gateway, not proof for all providers or macOS.
 Evidence is in `standalone-desktop-artifacts/large-chat-image-20261102/`.
+
+## Larger chat documents (2026-11-02)
+
+A gateway advertising desktop contract v5 or newer now also accepts non-image
+chat attachments up to 25 MiB through the existing `file.attach` RPC. The prior
+5 MiB bound remains for gateways with older or unknown contracts. A focused
+regression demonstrated the former 5 MiB rejection and now verifies exact
+bytes and the message reference for a modern gateway, plus refusal before a
+large frame is sent to an unknown gateway. All 19 worker contracts and the
+common Linux suite (964 passed, 15 ignored) passed.
+
+A Linux native-window run selected a 7,340,548-byte PDF using the real GTK
+chooser and sent it through the pinned Hermes gateway to a private model
+fixture. The gateway stored the exact source bytes and the model request
+contained the document reference. The tested binary SHA-256 was
+`2d0bb81f5215894569a6c203131b4fe2d819d3f4dea6515777b7c4783d3b9e01`.
+This does not prove macOS or real-provider behavior. Evidence is in
+`standalone-desktop-artifacts/large-chat-document-20261102/`.

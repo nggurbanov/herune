@@ -846,19 +846,19 @@ impl Worker {
             let mime = image_mime(&bytes);
             // Canonical images use HTTP. Contract v5 explicitly supports large
             // WebSocket frames; older or unknown peers retain the smaller limit.
-            let supports_large_images = entry.canonical == Some(true)
-                || self
-                    .transport
-                    .as_ref()
-                    .and_then(|transport| transport.snapshot.as_ref())
-                    .and_then(|snapshot| snapshot.info.get("desktop_contract"))
-                    .and_then(Value::as_u64)
-                    .is_some_and(|version| version >= 5);
-            let limit = if mime.is_some() && supports_large_images {
-                crate::gateway::MAX_CHAT_IMAGE_BYTES
-            } else {
-                5 * 1024 * 1024
-            };
+            let supports_large_frames = self
+                .transport
+                .as_ref()
+                .and_then(|transport| transport.snapshot.as_ref())
+                .and_then(|snapshot| snapshot.info.get("desktop_contract"))
+                .and_then(Value::as_u64)
+                .is_some_and(|version| version >= 5);
+            let limit =
+                if supports_large_frames || (mime.is_some() && entry.canonical == Some(true)) {
+                    crate::gateway::MAX_CHAT_ATTACHMENT_BYTES
+                } else {
+                    5 * 1024 * 1024
+                };
             if metadata.len() > limit as u64 {
                 return Err(format!(
                     "{} exceeds the {} MiB attachment limit",

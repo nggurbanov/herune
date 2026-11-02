@@ -147,7 +147,7 @@ impl Gateway {
             let limit = if matches!(request.method, PageMethod::Post)
                 && request.path == "/api/chat/image-upload"
             {
-                4 * MAX_CHAT_IMAGE_BYTES.div_ceil(3) + 64 * 1024
+                4 * MAX_CHAT_ATTACHMENT_BYTES.div_ceil(3) + 64 * 1024
             } else {
                 MAX_BODY
             };

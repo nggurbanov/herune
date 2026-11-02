@@ -1506,3 +1506,102 @@ fn legacy_large_images_require_a_gateway_with_large_frame_support() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn large_documents_require_a_gateway_with_large_frame_support() {
+    for contract in [Some(8), None] {
+        let root =
+            std::env::temp_dir().join(format!("herune-large-document-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("document.pdf");
+        let mut bytes = vec![0x31; 7 * 1024 * 1024];
+        bytes[..8].copy_from_slice(b"%PDF-1.7");
+        std::fs::write(&path, &bytes).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: Some("synthetic-token".into()),
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            if let Some(version) = contract {
+                state["info"]["desktop_contract"] = json!(version);
+            }
+            answer(&mut ws, &resume, state);
+            if contract.is_none() {
+                ws.get_mut()
+                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .unwrap();
+                assert!(
+                    ws.read().is_err(),
+                    "an unknown gateway must not receive a large frame"
+                );
+                return;
+            }
+            let upload = request(&mut ws, "file.attach");
+            let encoded = upload["params"]["data_url"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("data:application/octet-stream;base64,")
+                .unwrap();
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+                bytes
+            );
+            answer(
+                &mut ws,
+                &upload,
+                json!({"attached":true,"ref_text":"@file:document.pdf"}),
+            );
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
+            connection: 1,
+            profile: "work".into(),
+            session: Some("stored".into()),
+        };
+        let mut prepared = Prepared::new(
+            &connection,
+            &scope,
+            SendInput {
+                text: "Read this".into(),
+                attachments: vec![AttachmentInput {
+                    path,
+                    name: "document.pdf".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        prepared.runtime = Some("live".into());
+        prepared.canonical = Some(false);
+        let journal = Journal::new(root.join("journal")).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        worker.transport.as_mut().unwrap().resume("stored").unwrap();
+        let result = worker.prepare_files(&mut prepared, &journal);
+        if contract.is_some() {
+            assert!(result.is_ok(), "modern gateway upload: {result:?}");
+            assert_eq!(
+                prepared.text.as_deref(),
+                Some("@file:document.pdf\n\nRead this")
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "unknown legacy version must keep the old limit"
+            );
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
