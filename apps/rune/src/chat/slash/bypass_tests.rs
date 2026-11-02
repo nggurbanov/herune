@@ -134,3 +134,58 @@ fn legacy_bypass_uses_exact_ack_no_getter_and_preserves_reported_process_overrid
     assert_eq!(pending.config_ack.as_ref().unwrap()["scope"], "session");
     server.join().unwrap();
 }
+
+#[test]
+fn legacy_bypass_lost_ack_does_not_overwrite_a_later_choice() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(0, false));
+        let set = request(&mut ws, "config.set");
+        assert_eq!(set["params"]["value"], "1");
+        // The write took effect, but its acknowledgement was lost. Another
+        // client has since disabled bypass before the first client recovers.
+        drop(ws);
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(0, false));
+        match ws.read() {
+            Ok(Message::Close(_))
+            | Err(tungstenite::Error::ConnectionClosed)
+            | Err(tungstenite::Error::Protocol(_)) => {}
+            other => panic!("unexpected request after recovery: {other:?}"),
+        }
+    });
+    let persisted = std::cell::RefCell::new(Vec::new());
+    let persist = |intent: &SlashIntent| {
+        *persisted.borrow_mut() = serde_json::to_vec(intent).unwrap();
+        Ok(())
+    };
+    let mut pending = intent();
+    pending.params["value"] = json!("1");
+    let mut transport = SessionTransport::connect(&connection, "work").unwrap();
+    assert!(
+        execute(&mut transport, &mut pending, &json!({}), &persist)
+            .unwrap_err()
+            .uncertain
+    );
+    let mut recovered: SlashIntent = serde_json::from_slice(&persisted.borrow()).unwrap();
+    let mut transport = SessionTransport::connect(&connection, "work").unwrap();
+    let error = execute(&mut transport, &mut recovered, &json!({}), &persist).unwrap_err();
+    assert!(error.uncertain);
+    drop(transport);
+    server.join().unwrap();
+}

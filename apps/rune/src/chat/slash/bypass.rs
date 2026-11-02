@@ -51,8 +51,16 @@ pub(super) fn execute(
         let warning = (actual != requested).then_some("The saved bypass change is not the current state. Choose the switch again to make a fresh request.");
         return Ok(receipt(&snapshot, &actual, Some(actual == "1"), warning));
     }
-    if intent.attempted && !transport.canonical && intent.config_ack.is_some() {
-        return Ok(legacy_receipt(&snapshot, &requested));
+    if intent.attempted && !transport.canonical {
+        if intent.config_ack.is_some() {
+            return Ok(legacy_receipt(&snapshot, &requested));
+        }
+        // Legacy has no getter for the session flag. The effective snapshot
+        // can also include a profile or process override, so it cannot prove
+        // whether the write landed or whether another client changed it later.
+        return Err(unknown(
+            "The bypass change may have been applied, but its acknowledgement was lost. Review the current state and acknowledge this outcome before making a new choice.",
+        ));
     }
     if intent.generation != Some(snapshot.generation) {
         return Err(preflight_error(
