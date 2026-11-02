@@ -233,3 +233,14 @@ establishes the lock race, but one successful repeat does not prove that race
 was the sole cause of the prior failure. The fixture used no real credentials or
 provider; macOS and other provider workflows remain unverified. Evidence for both
 runs is retained at `standalone-desktop-artifacts/model-switch-native-20261102/`.
+
+On 2026-11-02, two further native Linux runs used the pinned real Hermes gateway
+with a private OpenAI-compatible fixture. In an existing chat, the second user
+turn used the newly selected model and preserved the stored conversation and
+first turn. A second run switched between two configured custom provider routes:
+the second turn reached the second route with its selected model. Both routes
+were distinct paths on one local test server. Each submitted user turn appeared
+once; all known app and gateway processes exited. These checks do not establish
+compatibility with real provider accounts or macOS. Evidence is retained under
+`standalone-desktop-artifacts/model-existing-20261102/` and
+`standalone-desktop-artifacts/provider-switch-native-20261102/`.
