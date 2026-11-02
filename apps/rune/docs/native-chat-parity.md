@@ -650,3 +650,19 @@ clipboard staging changes. Evidence:
 `standalone-desktop-artifacts/sidebar-multiprofile-native-20261102/result.json`.
 The run covers two profiles on one source, not multiple gateways, NativeSelf,
 project-overview behavior or macOS.
+
+### Attachment drafts after an application crash (2026-11-02)
+
+A Linux native run against the pinned Hermes gateway prepared two stored chats,
+then saved a different unsent text and chosen local file in each draft. After
+confirming both entries had reached the private draft store, the test terminated
+only its own Herune process with SIGKILL. A new process restored the right text
+and attachment in each chat without submitting either. Both were then sent, and
+the gateway stored the matching file bytes. The gateway used a synthetic local
+model; no real provider was contacted.
+
+The tested executable SHA-256 was
+`ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`.
+Evidence: `standalone-desktop-artifacts/draft-attachments-crash-20261102/result.json`.
+This demonstrates recovery after the drafts were persisted, not a crash before
+the debounce or write completed; it does not cover pasted images or macOS.
