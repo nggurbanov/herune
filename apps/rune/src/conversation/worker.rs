@@ -285,6 +285,15 @@ impl Worker {
         if entry.legacy_attempted {
             return Err("The legacy gateway cannot prove whether this turn was sent. Read the transcript before discarding the saved send; retrying could duplicate it".into());
         }
+        // Resuming an existing chat receives the gateway greeting. A fresh
+        // chat needs a read-only probe before choosing its create format.
+        let stored = entry.stored.clone().or(entry.session.clone());
+        let resumed = if let Some(stored) = &stored {
+            Some(self.transport()?.resume(stored)?)
+        } else {
+            self.transport()?.negotiate_protocol()?;
+            None
+        };
         let canonical = self.transport()?.canonical;
         if entry.canonical.is_some_and(|saved| saved != canonical) {
             return Err(
@@ -295,9 +304,8 @@ impl Worker {
         journal.save(&entry)?;
         // A stored session is resumed by its durable id. Failure never creates
         // an unrelated conversation and never changes the GUI surface to CLI.
-        let stored = entry.stored.clone().or(entry.session.clone());
-        let (snapshot, created) = if let Some(ref stored) = stored {
-            (self.transport()?.resume(stored)?, false)
+        let (snapshot, created) = if let Some(snapshot) = resumed {
+            (snapshot, false)
         } else if entry.input.canonical_bot {
             if let Some(winner) = self.bot_registry()? {
                 (self.transport()?.resume(&winner)?, false)
