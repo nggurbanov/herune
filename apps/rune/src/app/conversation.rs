@@ -443,6 +443,7 @@ impl Viewer {
             self.connection_epoch,
             &observed,
         );
+        changed |= self.reconcile_parked_sidebar_running(&observed);
         changed
     }
 }

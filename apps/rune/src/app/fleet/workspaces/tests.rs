@@ -145,3 +145,124 @@ fn parked_selected_route_restores_only_its_captured_profile_intent() {
         "selected input"
     );
 }
+
+#[test]
+fn parked_running_status_is_shown_only_on_its_retained_source_and_profile() {
+    use crate::{sidebar::Status, sidebar::fleet::SourceSidebar};
+    let root = std::env::temp_dir().join(format!("herune-parked-status-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut s = viewer();
+    s.selected_session = Some("same".into());
+    let a_scope = s.composer_scope();
+    s.conversation
+        .fixture(a_scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    let a_binding = s.current_source_binding().unwrap();
+    let a_key = a_binding.stamp().key();
+    let mut a = SourceSidebar::new_at(
+        a_binding,
+        windows::source_epoch(),
+        "default".into(),
+        std::sync::Arc::new(|| {}),
+        root.join("a"),
+    )
+    .unwrap();
+    a.state_mut().apply("sidebar.recents", Ok(serde_json::json!({"sessions":[{"id":"same","profile":"default","message_count":1},{"id":"same","profile":"other","message_count":1}]})));
+    let a_default = a.state().recents.rows[0].clone();
+    let a_other = a.state().recents.rows[1].clone();
+    s.fleet_state.partitions.insert(a_key.clone(), a);
+    switch(&mut s, "b");
+    let b_binding = s.current_source_binding().unwrap();
+    let b_key = b_binding.stamp().key();
+    let mut b = SourceSidebar::new_at(
+        b_binding,
+        windows::source_epoch(),
+        "default".into(),
+        std::sync::Arc::new(|| {}),
+        root.join("b"),
+    )
+    .unwrap();
+    b.state_mut().apply(
+        "sidebar.recents",
+        Ok(serde_json::json!({"sessions":[{"id":"same","profile":"default","message_count":1}]})),
+    );
+    let b_default = b.state().recents.rows[0].clone();
+    s.fleet_state.partitions.insert(b_key.clone(), b);
+    s.poll_conversations();
+    let a = s.fleet_state.partitions.get(&a_key).unwrap().state();
+    assert!(a.status(&a_default) == Status::Working);
+    assert!(a.status(&a_other) == Status::Idle);
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&b_key)
+            .unwrap()
+            .state()
+            .status(&b_default)
+            == Status::Idle
+    );
+    s.conversation
+        .fixture(a_scope.clone(), &serde_json::json!({"running":false}))
+        .unwrap();
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Idle
+    );
+    s.conversation
+        .fixture(a_scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Working
+    );
+    s.conversation
+        .fixture_queue_failure(a_scope.clone(), "stream disconnected", true, None);
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Idle
+    );
+    s.conversation
+        .fixture(a_scope, &serde_json::json!({"running":true}))
+        .unwrap();
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Working
+    );
+    s.fleet_state.workspaces.remove(&a_key);
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Idle
+    );
+    drop(s);
+    std::fs::remove_dir_all(root).unwrap();
+}

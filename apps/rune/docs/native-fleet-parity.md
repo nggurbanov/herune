@@ -167,3 +167,20 @@ Herune binary SHA-256
 This covers one default-profile chat on Linux, not remote sources, real model
 providers, other history operations, or macOS. Compact evidence is retained at
 `standalone-desktop-artifacts/chat-history-native-20261102/`.
+
+## Running chats on parked sources (2026-11-02)
+
+The fleet sidebar now also projects an already observed running conversation into
+its parked source's sidebar partition. The retained workspace binding and its
+lease must still be valid and match the partition's exact source stamp; only
+that workspace's conversation epoch and Backend profile are considered. A
+completed or disconnected stream, retired partition, or removed workspace
+clears this local overlay. Other sources and same-named profiles do not inherit
+it. No additional gateway connection is opened.
+
+A controller regression exercised two sources with equal session IDs and profile
+names, a second profile, completion, stream loss, and removal of the retained
+workspace. This is synthetic controller evidence, not native-window or real
+multi-gateway acceptance. It covers observed Backend-profile streams in loaded
+partitions; NativeSelf mapping, unobserved sessions and parked-source completion
+notifications remain separate work.

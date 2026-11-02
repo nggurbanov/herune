@@ -688,23 +688,30 @@ impl SidebarState {
         epoch: u64,
         scopes: &[crate::composer::DraftScope],
     ) -> bool {
-        let next: HashSet<_> =
-            if source.is_some() && source == self.source.as_ref() && epoch == self.owner_connection
-            {
-                scopes
-                    .iter()
-                    .filter(|scope| scope.connection == epoch && scope.profile_intent.is_backend())
-                    .filter_map(|scope| {
-                        scope
-                            .session
-                            .as_ref()
-                            .filter(|id| !id.is_empty())
-                            .map(|id| (scope.profile.clone(), id.clone()))
-                    })
-                    .collect()
-            } else {
-                HashSet::new()
-            };
+        let epoch =
+            (source.is_some() && source == self.source.as_ref() && epoch == self.owner_connection)
+                .then_some(epoch);
+        self.set_retained_running(epoch, scopes)
+    }
+
+    // The partition has its own read epoch; a retained workspace has a separate
+    // conversation epoch. Its caller must first validate the exact source binding.
+    pub(crate) fn set_retained_running(
+        &mut self,
+        epoch: Option<u64>,
+        scopes: &[crate::composer::DraftScope],
+    ) -> bool {
+        let next: HashSet<_> = scopes
+            .iter()
+            .filter(|scope| Some(scope.connection) == epoch && scope.profile_intent.is_backend())
+            .filter_map(|scope| {
+                scope
+                    .session
+                    .as_ref()
+                    .filter(|id| !id.is_empty())
+                    .map(|id| (scope.profile.clone(), id.clone()))
+            })
+            .collect();
         if self.retained_running == next {
             return false;
         }
