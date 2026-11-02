@@ -52,8 +52,17 @@ native host already had partial implementations of embedded plugin views; the
 Electron renderer supported additional management and media workflows. Connector
 account and toolset provider/credential editing, embedded media, cross-window
 relay, file grants and preview execution remain unavailable in these native
-views. The native toolbar does not yet apply plugin workspace scope, and native
-socket reconnection and platform acceptance remain open. The SDK model catalog
+views. The native toolbar does not yet apply plugin workspace scope, and platform
+acceptance remains open. For an already connected plugin gateway, the host now
+requests a fresh owner-bound socket after a disconnect with bounded backoff;
+interrupted requests are not resent. Synthetic host tests cover reconnection,
+failed redial and owner retirement; real backend and macOS recovery remain
+unverified. The 2026-11-02 Linux host, SDK and Bots suites passed, as did
+the 957-test Rust suite and a synthetic native WebView smoke. The Rust run used
+the freshly generated stylesheet; the final host archive retains the prior
+stylesheet byte-for-byte because a stale local dependency changed font embedding.
+The reconnect behavior itself was tested separately from that stylesheet.
+The SDK model catalog
 menu exports are not yet ported. These are parity gaps, not proof that the
 Electron workflows were preserved. Plugin-originated workspace changes use
 `setWorkspaceScopeAsync` and wait for an owner-verified native acknowledgement;

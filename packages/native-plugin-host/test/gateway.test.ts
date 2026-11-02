@@ -1,4 +1,4 @@
-import {expect,it} from 'vitest'
+import {expect,it,vi} from 'vitest'
 import {NativeBridge} from '../src/bridge'
 import {installNativeSockets} from '../src/socket'
 import {createGatewayPool} from '../src/gateway'
@@ -21,3 +21,54 @@ it('uses a retained actual SDK gateway and routes requests to its captured sourc
     expect(frames.filter(m=>m.kind==='plugin-gateway-prepare')).toHaveLength(1);release()
   } finally {pool.close();remove();bridge.close()}
 })
+
+it('reconnects a retained owner with a fresh receipt without replaying an interrupted request', async () => {
+  const frames: any[] = []; let bridge: NativeBridge; let receipt = 0
+  const send = (message: unknown) => window.dispatchEvent(new CustomEvent('hermes-host-message', {detail: message}))
+  bridge = new NativeBridge({postMessage: raw => { const m = JSON.parse(raw); frames.push(m); queueMicrotask(() => {
+    if (m.kind === 'plugin-gateway-prepare') bridge.receive({type:'plugin-response',id:m.id,value:{url:`ws://hermes-native-gateway.invalid/r${++receipt}`}})
+    else if (m.kind === 'plugin-socket-open') { bridge.receive({type:'plugin-response',id:m.id,value:{}}); send({type:'plugin-socket',receipt:m.payload.receipt,event:'open',data:{}}) }
+    else if (m.kind === 'plugin-socket-send') { bridge.receive({type:'plugin-response',id:m.id,value:{}}); const f = JSON.parse(m.payload.frame.text); if (f.method === 'session.list') send({type:'plugin-socket',receipt:m.payload.receipt,event:'message',data:{text:JSON.stringify({jsonrpc:'2.0',id:f.id,result:{ok:true}})}}) }
+    else bridge.receive({type:'plugin-response',id:m.id,value:{}})
+  }) }})
+  bridge.setOwner({connection_id:'a',profile:'default'}); const remove = installNativeSockets(bridge)
+  const events: any[] = []; const pool = createGatewayPool(bridge, event => events.push(event), () => {})
+  try {
+    const owner = {connection_id:'b',profile:'ops'}; const release = await pool.retain(owner)
+    const pending = pool.request(owner,'settings.write',{value:'once'}); const failure = expect(pending).rejects.toThrow()
+    await vi.waitFor(() => expect(frames.some(m => m.kind === 'plugin-socket-send' && JSON.parse(m.payload.frame.text).method === 'settings.write')).toBe(true))
+    send({type:'plugin-socket',receipt:'r1',event:'close',data:{code:1006}})
+    await failure
+    await vi.waitFor(() => expect(receipt).toBe(2), {timeout:3500})
+    await vi.waitFor(async () => expect(await pool.request(owner,'session.list',{})).toEqual({ok:true}))
+    send({type:'plugin-socket',receipt:'r2',event:'message',data:{text:JSON.stringify({jsonrpc:'2.0',method:'event',params:{type:'status.update',payload:{ok:true}}})}})
+    expect(events.at(-1)).toMatchObject({type:'status.update',profile:'ops',connectionId:'b'})
+    expect(frames.filter(m => m.kind === 'plugin-gateway-prepare').map(m => m.payload)).toEqual([{connectionId:'b',profile:'ops'},{connectionId:'b',profile:'ops'}])
+    expect(frames.filter(m => m.kind === 'plugin-socket-send' && JSON.parse(m.payload.frame.text).method === 'settings.write')).toHaveLength(1)
+    release()
+    send({type:'plugin-socket',receipt:'r2',event:'close',data:{code:1006}})
+    await new Promise(resolve => setTimeout(resolve,1200)); expect(receipt).toBe(2)
+  } finally { pool.close(); remove(); bridge.close() }
+}, 8000)
+
+it('retries a failed redial and stops when its owner changes', async () => {
+  let bridge: NativeBridge; let receipt = 0; let failRedial = true
+  const send = (message: unknown) => window.dispatchEvent(new CustomEvent('hermes-host-message', {detail: message}))
+  bridge = new NativeBridge({postMessage: raw => { const m = JSON.parse(raw); queueMicrotask(() => {
+    if (m.kind === 'plugin-gateway-prepare') bridge.receive({type:'plugin-response',id:m.id,value:{url:`ws://hermes-native-gateway.invalid/r${++receipt}`}})
+    else if (m.kind === 'plugin-socket-open' && m.payload.receipt === 'r2' && failRedial) { failRedial = false; bridge.receive({type:'plugin-response',id:m.id,error:'offline'}) }
+    else if (m.kind === 'plugin-socket-open') { bridge.receive({type:'plugin-response',id:m.id,value:{}}); send({type:'plugin-socket',receipt:m.payload.receipt,event:'open',data:{}}) }
+    else bridge.receive({type:'plugin-response',id:m.id,value:{}})
+  }) }})
+  bridge.setOwner({connection_id:'a',profile:'default'}); const remove = installNativeSockets(bridge)
+  const pool = createGatewayPool(bridge, () => {}, () => {})
+  try {
+    const release = await pool.retain({connection_id:'b',profile:'ops'})
+    send({type:'plugin-socket',receipt:'r1',event:'close',data:{code:1006}})
+    await vi.waitFor(() => expect(receipt).toBe(3), {timeout:5000})
+    send({type:'plugin-socket',receipt:'r3',event:'close',data:{code:1006}})
+    bridge.setOwner({connection_id:'other',profile:'default'})
+    await new Promise(resolve => setTimeout(resolve,1200)); expect(receipt).toBe(3)
+    release()
+  } finally { pool.close(); remove(); bridge.close() }
+}, 8000)
