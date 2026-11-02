@@ -198,3 +198,17 @@ held-write regression failed before the change. The final Linux Rust suite passe
 missing project labels. No real Hermes gateway or macOS acceptance was performed
 for this increment. Logs and the bounded source patch are retained under
 `standalone-desktop-artifacts/project-active-queue-20261102/`.
+
+### Project working directories across chat switches (2026-11-02)
+
+A Linux native-window test used the pinned real Hermes gateway, one private
+profile and a synthetic model endpoint. Two projects were created through the
+gateway in isolated workspace directories. In the UI, a new conversation was
+sent in each project; the gateway's session database recorded the appropriate
+working directory for each. Switching back to the first tab and sending a
+follow-up kept both recorded directories unchanged and delivered the follow-up.
+The two runs used binary SHA-256
+`4530ebb9678b1312be0a471675d26c4a9affc9286f30be0e42b7eb1f4ec0b801`.
+This proves this one-profile Linux scenario; project creation in the UI, other
+profiles, real providers and macOS were not tested here. Evidence is in
+`standalone-desktop-artifacts/project-cwd-native-20261102/`.
