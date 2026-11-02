@@ -244,6 +244,12 @@ impl Default for Conversation {
         Self::new()
     }
 }
+impl ConversationView {
+    pub(crate) fn stream_observed(&self) -> bool {
+        self.stream_error.is_none()
+    }
+}
+
 impl Conversation {
     pub fn new() -> Self {
         let (replies, receive) = mpsc::channel();

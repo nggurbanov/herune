@@ -250,6 +250,49 @@ fn event_projection_uses_exact_approval_choices_and_only_urgent_credit_notices()
     assert!(!n.dispatch(sample(Kind::TurnDone, "one")));
 }
 #[test]
+fn parked_approval_keeps_origin_principal_and_cannot_offer_remote_actions() {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(4);
+    let mut notifications = Notifications::new();
+    notifications.started = true;
+    notifications.test_service = Some(sender);
+    notifications.bind_connection("foreground-source".into());
+    notifications.set_active(scope("same"));
+    let mut parked = scope("same");
+    parked.connection = 8;
+    let payload = json!({"prompt_id":"prompt-a","execution_generation":3,"choices":["once","deny"],"command":"private fixture"});
+    notifications.event_from_source(
+        "parked-source",
+        &parked,
+        "approval.request",
+        &payload,
+        "runtime-a",
+        false,
+        "Chat A",
+        false,
+    );
+    let service::Command::Show(request) = receiver.try_recv().unwrap() else {
+        panic!("expected native notification")
+    };
+    assert_eq!(request.principal, "parked-source");
+    assert_eq!(request.notice.scope, parked);
+    assert!(request.notice.buttons.is_empty());
+    notifications.event_from_source(
+        "parked-source",
+        &parked,
+        "approval.request",
+        &payload,
+        "runtime-a",
+        true,
+        "Chat A",
+        false,
+    );
+    assert!(
+        receiver.try_recv().is_err(),
+        "replayed requests must stay silent"
+    );
+}
+
+#[test]
 fn daemon_sender_and_origin_client_control_all_actions_and_body_fallbacks() {
     let mut registry = registry::Registry::new();
     let now = Instant::now();

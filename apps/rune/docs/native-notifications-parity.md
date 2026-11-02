@@ -110,3 +110,22 @@ checkpoint evidence.
 
 Protocol/API references: [Desktop Notifications Specification](https://specifications.freedesktop.org/notification/latest/protocol.html),
 [zbus connection builder](https://docs.rs/zbus/5.19.0/zbus/connection/struct.Builder.html).
+
+## Approval and input requests from parked sources (2026-11-02)
+
+Accepted live approval and clarification/input requests from a retained Backend
+profile can now reach the notification broker while another source is active.
+The banner carries the originating connection principal, profile and session;
+replayed events, retired profiles, disconnected streams and mismatched runtime
+identities remain suppressed. For a parked source the banner offers only View,
+not Approve/Reject: responding stays on the actual conversation card. A body
+click checks the retained binding and current fleet binding before requesting
+navigation to that source and session. It cannot send an approval action.
+Existing notification preferences, focus and four-second reconnect quiet period
+remain in effect. Completion/error policy is unchanged.
+
+Focused Linux tests cover colliding identities, invalid and retired owners, a
+private gateway route on click, and delivery and click through a private D-Bus
+notification service. These are test fixtures, not native desktop acceptance
+against multiple real gateways. NativeSelf parked owners and macOS/Windows
+notification adapters remain outside this increment.

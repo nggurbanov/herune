@@ -266,3 +266,36 @@ fn parked_running_status_is_shown_only_on_its_retained_source_and_profile() {
     drop(s);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn parked_approval_binding_requires_live_exact_source_and_runtime() {
+    let mut s = viewer();
+    s.selected_session = Some("same".into());
+    let scope = s.composer_scope();
+    s.conversation
+        .fixture(scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    let source = s.current_source_binding().unwrap().stamp().clone();
+    switch(&mut s, "b");
+    assert_eq!(
+        s.parked_notice_binding(&scope, "same").unwrap().stamp(),
+        &source
+    );
+    assert!(s.parked_notice_binding(&scope, "wrong-runtime").is_none());
+    let mut wrong = scope.clone();
+    wrong.connection += 1000;
+    assert!(s.parked_notice_binding(&wrong, "same").is_none());
+    let mut native = scope.clone();
+    native.profile_intent = crate::source::ProfileIntent::NativeSelf;
+    assert!(s.parked_notice_binding(&native, "same").is_none());
+    s.conversation
+        .fixture_queue_failure(scope.clone(), "stream lost", true, None);
+    s.poll_conversations();
+    assert!(s.parked_notice_binding(&scope, "same").is_none());
+    s.conversation
+        .fixture(scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    s.retired_profiles
+        .insert((scope.connection, scope.profile.clone()));
+    assert!(s.parked_notice_binding(&scope, "same").is_none());
+}
