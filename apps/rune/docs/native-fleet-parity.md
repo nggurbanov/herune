@@ -184,3 +184,16 @@ workspace. This is synthetic controller evidence, not native-window or real
 multi-gateway acceptance. It covers observed Backend-profile streams in loaded
 partitions; NativeSelf mapping, unobserved sessions and parked-source completion
 notifications remain separate work.
+
+A later Linux native-window check exercised this path with two private synthetic
+gateways. Both had the same profile and session ID; their live-session RPCs
+returned empty lists, so they did not supply the observed status. The old binary
+`b51a803ebafc480a5878bfde7ab90af3d9b36b1dad19c979b903b037b05aaad6`
+showed the still-running parked chat as Idle. With binary
+`032c34ea93fc2027f8d758dc8c9195ecca53595dd1564d3f9934e5685a82b79e`
+(source `a1100d575a`), the parked source reported Working, the other source
+with the same ID stayed Idle, and the parked status returned to Idle after
+Stop. The first fixture attempts needed additional gateway methods; the first
+new-binary attempt also checked the second list before it loaded. The corrected
+run passed. This is not acceptance against real gateways or NativeSelf.
+Evidence: `standalone-desktop-artifacts/parked-session-native-20261102/`.
