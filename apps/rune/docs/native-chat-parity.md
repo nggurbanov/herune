@@ -447,3 +447,17 @@ the same result while the second conversation continued. Each relevant model
 request occurred once. The first fixture attempt missed composer focus; it was
 corrected and rerun. No client code changed. This is not real-provider or macOS
 acceptance. Evidence: `standalone-desktop-artifacts/parallel-model-choice-20261102/`.
+
+### Unsent files across restart (2026-11-02)
+
+A private Linux native-window test created two stored conversations against the
+pinned Hermes backend, attached a different text file to each draft through the
+GTK chooser, then quit and restarted Herune. Both drafts and the right attachment
+reappeared in their own conversation without being sent during restart. Sending
+each afterward delivered its exact file bytes and text once to a synthetic model;
+the other conversation's file was absent from each request. The actual backend
+and UI were used, with model completion stubbed. This covers a normal restart,
+not a crash, missing source files, macOS or another provider. The executable
+was `4f1205aed8e64b73b78e44f697d79e630df943016544341831406691d7546a70`, built
+from the source preceding `fd931b1a92` with its same client changes. Evidence:
+`standalone-desktop-artifacts/draft-attachments-native-20261102/`.
