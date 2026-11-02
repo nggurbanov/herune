@@ -137,3 +137,20 @@ miniwindow. Exact evidence and limits are in `native-fleet-acceptance.md`.
 
 No user agent/provider, physical microphone/speaker or user keychain is used by
 these isolated acceptance lanes. The full migration goal remains open.
+
+## Status of locally observed conversations (2026-11-02)
+
+The active sidebar combines gateway status with confirmed running streams held
+by this Viewer. The overlay is limited to its exact source stamp, connection
+lifetime, Backend profile and stored session, and is removed when observation
+is lost or the owner is retired. The legacy gateway's untagged process-wide
+active list is not attributed to profiles; its unsupported scoped RPC error
+remains visible. NativeSelf and sessions not observed by this Viewer are not
+covered by this overlay.
+
+A private Linux native run against pinned Hermes and a synthetic local model
+held two ordinary chats open. The active sidebar showed both as Working, then
+cleared each status as its stream stopped or completed. The source/profile
+collision, connection retirement and lost-stream regression passed, as did the
+971-test Linux common suite (15 ignored). This is not macOS or real-provider
+acceptance. Evidence: `standalone-desktop-artifacts/running-status-native-20261102/`.

@@ -276,6 +276,13 @@ This is one source, one profile and a synthetic model provider, not proof of
 cross-profile or real-provider behavior or macOS acceptance. The native evidence
 is at `standalone-desktop-artifacts/parallel-sessions-native-20261102/`.
 
+A subsequent private Linux run against the same pinned Hermes backend held two
+Bot Chat responses in different profiles concurrently. One completed in the
+background while the other kept streaming; switching back retained distinct
+histories and neither prompt was resubmitted. The model was synthetic; real
+providers and macOS remain unverified. Evidence:
+`standalone-desktop-artifacts/parallel-bots-real-20261102/`.
+
 ## Native text and image attachments
 
 On 2026-11-02 a Linux native-window test used the actual GTK chooser and pinned

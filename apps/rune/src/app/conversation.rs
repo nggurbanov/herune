@@ -433,6 +433,16 @@ impl Viewer {
             self.refresh_recoverable();
         }
         changed |= self.poll_policy();
+        let source = self
+            .connection
+            .as_ref()
+            .and_then(|connection| crate::source::SourceStamp::from_connection(connection).ok());
+        let observed = self.conversation.retained_running_scopes();
+        changed |= self.sidebar_state.reconcile_retained_running(
+            source.as_ref(),
+            self.connection_epoch,
+            &observed,
+        );
         changed
     }
 }

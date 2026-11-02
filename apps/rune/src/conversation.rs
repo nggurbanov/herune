@@ -360,6 +360,13 @@ impl Conversation {
     pub fn view(&self, scope: &DraftScope) -> Option<&ConversationView> {
         self.views.get(&self.key(scope))
     }
+    pub(crate) fn retained_running_scopes(&self) -> Vec<DraftScope> {
+        self.views
+            .iter()
+            .filter(|(_, view)| view.running && view.stream_error.is_none())
+            .map(|(scope, _)| scope.clone())
+            .collect()
+    }
     pub fn bypass_receipt(&mut self, owner: &DraftScope, value: &Value) -> bool {
         let key = self.key(owner);
         let Some(view) = self.views.get_mut(&key) else {
@@ -1266,6 +1273,9 @@ impl Conversation {
                 } => {
                     let key = self.key(&origin);
                     let view = self.views.entry(key).or_default();
+                    if stream_loss {
+                        view.stream_error = Some(message.clone());
+                    }
                     // A transport retry must not hide an unresolved send receipt.
                     if stream_loss && id.is_none() && view.uncertain.is_some() {
                         continue;
@@ -1273,7 +1283,6 @@ impl Conversation {
                     if id.is_some() {
                         view.preparing = false;
                     }
-                    view.stream_error = stream_loss.then(|| message.clone());
                     view.error = Some(message.clone());
                     if id.is_some() {
                         view.uncertain = id;

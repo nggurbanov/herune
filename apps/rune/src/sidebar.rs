@@ -238,6 +238,7 @@ pub struct SidebarState {
     pub open_select: Option<String>,
     pub menu: Option<(String, String, rune::PointerPress)>,
     pub live: HashMap<(String, String), Status>,
+    retained_running: HashSet<(String, String)>,
     pub errors: BTreeMap<String, String>,
     pub pending: HashSet<String>,
     pub notice: Option<String>,
@@ -292,6 +293,7 @@ impl SidebarState {
             open_select: None,
             menu: None,
             live: HashMap::new(),
+            retained_running: HashSet::new(),
             errors: BTreeMap::new(),
             pending: HashSet::new(),
             notice: None,
@@ -488,6 +490,7 @@ impl SidebarState {
         self.runs.clear();
         self.peek_job = None;
         self.live.clear();
+        self.retained_running.clear();
         self.live_loaded = false;
         self.pending.clear();
         self.errors.clear();
@@ -660,6 +663,14 @@ impl SidebarState {
                 }
             }
         }
+        if row.provenance.as_ref() == self.source.as_ref()
+            && row.aliases().into_iter().any(|id| {
+                self.retained_running
+                    .contains(&(row.profile().to_owned(), id.to_owned()))
+            })
+        {
+            return Status::Working;
+        }
         if row.scheduler_owned == Some(true) {
             return Status::Working;
         }
@@ -671,6 +682,36 @@ impl SidebarState {
             Status::Idle
         }
     }
+    pub(crate) fn reconcile_retained_running(
+        &mut self,
+        source: Option<&SourceStamp>,
+        epoch: u64,
+        scopes: &[crate::composer::DraftScope],
+    ) -> bool {
+        let next: HashSet<_> =
+            if source.is_some() && source == self.source.as_ref() && epoch == self.owner_connection
+            {
+                scopes
+                    .iter()
+                    .filter(|scope| scope.connection == epoch && scope.profile_intent.is_backend())
+                    .filter_map(|scope| {
+                        scope
+                            .session
+                            .as_ref()
+                            .filter(|id| !id.is_empty())
+                            .map(|id| (scope.profile.clone(), id.clone()))
+                    })
+                    .collect()
+            } else {
+                HashSet::new()
+            };
+        if self.retained_running == next {
+            return false;
+        }
+        self.retained_running = next;
+        true
+    }
+
     pub fn matches(&self, row: &SidebarSession, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         (query.is_empty()
