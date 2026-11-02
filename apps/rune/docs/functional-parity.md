@@ -676,3 +676,16 @@ The Mermaid-enabled RuneKit gate additionally passed its selected unit test and
 106 integration tests. The current production app built in the same private
 RAM overlay without a UI launch; that volatile binary is not a durable release
 checkpoint. Vendor verification and a reverse/forward patch round trip passed.
+
+### Remote text encoding safety (2026-11-02)
+
+Before saving a remote preview containing U+FFFD, Herune now reads the original
+bytes and compares them with the UTF-8 bytes of the loaded text. It refuses the
+write and retains the edited draft if the file was decoded with replacement or
+has changed; a genuine U+FFFD in valid UTF-8 remains editable. Ordinary text
+keeps the existing read-before-save path. A private pinned Hermes backend
+confirmed that valid and invalid source bytes can produce the same preview.
+
+This is not an atomic compare-and-swap for remote writes: Hermes still writes
+separately after the read, so another writer can change the file between the
+check and the write. Local writes retain their existing snapshot check.

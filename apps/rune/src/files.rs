@@ -218,6 +218,26 @@ impl Files {
             request
         }
     }
+    fn write_editor(&self) -> Vec<PageEffect> {
+        let Some(editor) = &self.editor else {
+            return vec![];
+        };
+        let Some(content) = &editor.saving else {
+            return vec![];
+        };
+        let mut body = json!({"path":editor.path,"content":content});
+        if let Some(id) = &editor.owner.session {
+            body["session_id"] = json!(id);
+        }
+        let request = if self.local {
+            body["expected"] = json!(editor.original);
+            PageRequest::local_fs("/api/fs/write-text", body)
+        } else {
+            PageRequest::post("/api/fs/write-text", body)
+        }
+        .profile(&editor.owner.profile);
+        vec![("files.editor.write".into(), request)]
+    }
     fn folder(&mut self, path: String) -> Vec<PageEffect> {
         let Some(owner) = &self.owner else {
             return vec![];
@@ -547,21 +567,35 @@ impl Files {
                     );
                     return vec![];
                 }
-                let Some(content) = editor.saving.clone() else {
+                if !self.local && editor.original.contains('\u{fffd}') {
+                    let path = editor.path.clone();
+                    let owner = editor.owner.clone();
+                    let request = self.read_request("/api/fs/read-data-url", &path, &owner);
+                    return vec![("files.editor.check-raw".into(), request)];
+                }
+                return self.write_editor();
+            }
+            "files.editor.check-raw" => {
+                let Some(editor) = &mut self.editor else {
                     return vec![];
                 };
-                let mut body = json!({"path":editor.path,"content":content});
-                if let Some(id) = &editor.owner.session {
-                    body["session_id"] = json!(id);
+                let bytes = value
+                    .as_str()
+                    .or(value["dataUrl"].as_str())
+                    .or(value["data_url"].as_str())
+                    .ok_or("The agent returned no file data")
+                    .and_then(|data| {
+                        crate::chat::media::decode_data_url(data)
+                            .map(|(_, bytes)| bytes)
+                            .map_err(|_| "The agent returned invalid file data")
+                    });
+                if !bytes.is_ok_and(|bytes| bytes == editor.original.as_bytes()) {
+                    editor.busy = false;
+                    editor.saving = None;
+                    editor.error = Some("The file is not valid UTF-8 or changed on disk. Save your edits as a copy instead".into());
+                    return vec![];
                 }
-                let request = if self.local {
-                    body["expected"] = json!(editor.original);
-                    PageRequest::local_fs("/api/fs/write-text", body)
-                } else {
-                    PageRequest::post("/api/fs/write-text", body)
-                }
-                .profile(&editor.owner.profile);
-                return vec![("files.editor.write".into(), request)];
+                return self.write_editor();
             }
             "files.editor.write" => {
                 if let Some(editor) = &mut self.editor {
@@ -768,6 +802,70 @@ mod tests {
         );
         assert!(state.trash.is_none());
     }
+    #[test]
+    fn remote_editor_checks_ambiguous_unicode_against_original_bytes_before_saving() {
+        use base64::Engine;
+        for (original_bytes, should_save) in [
+            (b"bad \xff".as_slice(), false),
+            ("bad \u{fffd}".as_bytes(), true),
+        ] {
+            let mut state = Files::new();
+            state.bind(scope(), false, Some("/work".into()));
+            state.action(Action::Open("/work/a.txt".into()));
+            state.apply("files.editor.read", Ok(json!({"text":"bad \u{fffd}"})));
+            state.editor.as_mut().unwrap().text.replace_text("edited");
+            state.action(Action::Save);
+            let check = state.apply("files.editor.check", Ok(json!({"text":"bad \u{fffd}"})));
+            assert_eq!(check.len(), 1);
+            assert_eq!(check[0].1.path, "/api/fs/read-data-url");
+            assert_eq!(check[0].1.profile.as_deref(), Some("work"));
+            assert!(
+                check[0]
+                    .1
+                    .query
+                    .iter()
+                    .any(|(k, v)| k == "session_id" && v == "stored")
+            );
+            let data = format!(
+                "data:text/plain;base64,{}",
+                base64::engine::general_purpose::STANDARD.encode(original_bytes)
+            );
+            let effects = state.apply("files.editor.check-raw", Ok(json!({"dataUrl": data})));
+            if should_save {
+                assert_eq!(effects.len(), 1);
+                assert_eq!(effects[0].1.path, "/api/fs/write-text");
+                assert_eq!(effects[0].1.body["content"], "edited");
+            } else {
+                assert!(effects.is_empty());
+                let editor = state.editor.as_ref().unwrap();
+                assert!(!editor.busy);
+                assert!(editor.dirty());
+                assert!(editor.error.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn failed_remote_byte_check_preserves_the_draft() {
+        let mut state = Files::new();
+        state.bind(scope(), false, Some("/work".into()));
+        state.action(Action::Open("/work/a.txt".into()));
+        state.apply("files.editor.read", Ok(json!({"text":"valid \u{fffd}"})));
+        state.editor.as_mut().unwrap().text.replace_text("draft");
+        state.action(Action::Save);
+        state.apply("files.editor.check", Ok(json!({"text":"valid \u{fffd}"})));
+        assert!(
+            state
+                .apply("files.editor.check-raw", Err("connection lost".into()))
+                .is_empty()
+        );
+        let editor = state.editor.as_ref().unwrap();
+        assert!(!editor.busy);
+        assert_eq!(editor.text.text, "draft");
+        assert!(editor.dirty());
+        assert_eq!(editor.error.as_deref(), Some("connection lost"));
+    }
+
     #[test]
     fn save_ack_keeps_edits_made_during_write_and_dirty_reload_is_refused() {
         let mut state = Files::new();
