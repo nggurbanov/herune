@@ -523,3 +523,101 @@ fn oversized_attachment_preserves_the_composer_before_a_send_is_prepared() {
     );
     assert!(s.can_send());
 }
+
+#[test]
+fn attachment_send_keeps_draft_until_gateway_limits_are_checked() {
+    const CHILD: &str = "HERUNE_ATTACHMENT_PREFLIGHT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let root = std::env::temp_dir().join(format!(
+            "herune-attachment-preflight-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::tests::attachment_send_keeps_draft_until_gateway_limits_are_checked",
+                "--nocapture",
+            ])
+            .env(CHILD, &root)
+            .env("HOME", &root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("LOCALAPPDATA", root.join("state"))
+            .env("TMPDIR", &root)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let path = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap()).join("file.pdf");
+    std::fs::write(&path, b"private fixture").unwrap();
+    let mut viewer = Viewer::empty();
+    viewer.connection = Some(Connection::Url {
+        endpoint: "http://127.0.0.1:1".into(),
+        token: None,
+    });
+    viewer.conversation.init(std::sync::Arc::new(|| {}));
+    let scope = viewer.composer_scope();
+    let draft = viewer.composer.draft_mut(scope.clone());
+    draft.text.replace_text("Keep this message");
+    draft.attachments.push(crate::composer::DraftAttachment {
+        path: path.clone(),
+        name: "file.pdf".into(),
+        preview: None,
+    });
+    viewer.send_draft();
+    let draft = viewer.composer.draft(&scope).unwrap();
+    assert_eq!(draft.text.text, "Keep this message");
+    assert_eq!(draft.attachments.len(), 1);
+    assert_eq!(draft.attachments[0].path, path);
+}
+
+#[test]
+fn attachment_completion_clears_only_the_unedited_originating_draft() {
+    let mut viewer = Viewer::empty();
+    viewer.fixture = true;
+    let scope = viewer.composer_scope();
+    let attachment = crate::composer::DraftAttachment {
+        path: "/private/fixture.pdf".into(),
+        name: "fixture.pdf".into(),
+        preview: None,
+    };
+    {
+        let draft = viewer.composer.draft_mut(scope.clone());
+        draft.text.replace_text("Original");
+        draft.attachments.push(attachment.clone());
+    }
+    let sent = viewer.composer.draft(&scope).unwrap().clone();
+    viewer.policy_sends.insert("first".into(), sent.clone());
+    viewer
+        .conversation
+        .fixture_attachments_ready(scope.clone(), "first");
+    viewer.poll_conversations();
+    let draft = viewer.composer.draft(&scope).unwrap();
+    assert!(draft.text.text.is_empty() && draft.attachments.is_empty());
+
+    {
+        let draft = viewer.composer.draft_mut(scope.clone());
+        draft.text.replace_text("Original");
+        draft.attachments.push(attachment);
+    }
+    viewer.policy_sends.insert("second".into(), sent);
+    viewer
+        .composer
+        .draft_mut(scope.clone())
+        .text
+        .replace_text("Newer user edit");
+    viewer
+        .conversation
+        .fixture_attachments_ready(scope.clone(), "second");
+    viewer.poll_conversations();
+    let draft = viewer.composer.draft(&scope).unwrap();
+    assert_eq!(draft.text.text, "Newer user edit");
+    assert_eq!(draft.attachments.len(), 1);
+}

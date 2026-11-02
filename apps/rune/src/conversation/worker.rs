@@ -94,6 +94,15 @@ pub(crate) enum Reply {
         policy_stamp: Option<PolicyStamp>,
         policy_fields: PolicyFields,
     },
+    AttachmentsReady {
+        origin: DraftScope,
+        id: String,
+    },
+    InputRejected {
+        origin: DraftScope,
+        id: String,
+        message: String,
+    },
     Event {
         origin: DraftScope,
         event: Event,
@@ -258,7 +267,11 @@ impl Worker {
         let delay = (2_u64 << self.reconnect_attempts.saturating_sub(1).min(4)).min(30);
         self.reconnect_at = Instant::now() + Duration::from_secs(delay);
     }
-    fn submit(&mut self, mut entry: Prepared, journal: &Journal) -> Result<(), CallError> {
+    fn submit(
+        &mut self,
+        mut entry: Prepared,
+        journal: &Journal,
+    ) -> Result<Option<String>, CallError> {
         let claim = journal.claim(&entry.submission_id)?;
         let journal = &claim;
         journal.check_current(&entry)?;
@@ -326,6 +339,27 @@ impl Worker {
         entry.runtime = Some(snapshot.runtime.clone());
         entry.stored = Some(snapshot.stored.clone());
         journal.save(&entry)?;
+        // Validate before rewinds, policy changes, or uploads. A clean local
+        // rejection keeps the intent until the editor confirms it is durable.
+        let untouched = !entry.attempted
+            && !entry.legacy_attempted
+            && entry.mutations.is_empty()
+            && !entry.policy_done
+            && entry.attached == 0
+            && entry.replay_attached == 0;
+        if untouched {
+            if let Err(message) = validate_transfer_limits(
+                &entry.input.attachments,
+                snapshot
+                    .info
+                    .get("desktop_contract")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|version| version >= 5),
+                canonical,
+            ) {
+                return Ok(Some(message));
+            }
+        }
         if created && !canonical {
             // Legacy create is lazy: the first real user prompt materializes
             // its row. Reading that not-yet-existent row would abort the send.
@@ -357,11 +391,17 @@ impl Worker {
                 policy_stamp: None,
                 policy_fields: PolicyFields::default(),
             });
-            return Ok(());
+            return Ok(None);
         }
         let existing = !created || entry.input.canonical_bot && canonical;
         self.prepare_policy(&mut entry, journal, snapshot, existing)?;
         self.prepare_files(&mut entry, journal)?;
+        if !entry.input.attachments.is_empty() {
+            self.notify(Reply::AttachmentsReady {
+                origin: self.scope.clone(),
+                id: entry.submission_id.clone(),
+            });
+        }
         let runtime = entry
             .runtime
             .as_deref()
@@ -478,7 +518,7 @@ impl Worker {
                 stream_loss: false,
             });
         }
-        Ok(())
+        Ok(None)
     }
     fn bot_registry(&mut self) -> Result<Option<String>, CallError> {
         let result = self.transport()?.call(
@@ -1089,8 +1129,18 @@ pub(crate) fn spawn(
                 }
                 Ok(Command::Send(entry, journal)) => {
                     let id = entry.submission_id.clone();
-                    if let Err(error) = worker.submit(entry, &journal) {
-                        worker.failure(Some(id), error, false);
+                    let result = worker.submit(entry, &journal);
+                    // The UI may safely inspect and retire the retained intent
+                    // only after this worker releases its claim.
+                    drop(journal);
+                    match result {
+                        Ok(Some(message)) => worker.notify(Reply::InputRejected {
+                            origin: worker.scope.clone(),
+                            id,
+                            message,
+                        }),
+                        Ok(None) => {}
+                        Err(error) => worker.failure(Some(id), error, false),
                     }
                 }
                 Ok(Command::Control(Control::Respond {
@@ -1397,6 +1447,42 @@ fn admission_status(value: &Value, runtime: &str, canonical: bool) -> Result<Str
     }
     .into())
 }
+fn validate_transfer_limits(
+    attachments: &[AttachmentInput],
+    large_frames: bool,
+    canonical: bool,
+) -> Result<(), String> {
+    use std::io::Read;
+    for file in attachments {
+        let mut input = std::fs::File::open(&file.path)
+            .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+        let metadata = input
+            .metadata()
+            .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+        if !metadata.is_file() {
+            return Err(format!("Could not read {}; select a file", file.name));
+        }
+        let mut header = Vec::new();
+        (&mut input)
+            .take(12)
+            .read_to_end(&mut header)
+            .map_err(|_| format!("Could not read {}", file.name))?;
+        let limit = if large_frames || (canonical && image_mime(&header).is_some()) {
+            crate::gateway::MAX_CHAT_ATTACHMENT_BYTES
+        } else {
+            5 * 1024 * 1024
+        };
+        if metadata.len() > limit as u64 {
+            return Err(format!(
+                "{} exceeds the {} MiB attachment limit",
+                file.name,
+                limit / (1024 * 1024)
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")

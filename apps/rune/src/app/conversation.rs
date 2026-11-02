@@ -151,10 +151,17 @@ impl Viewer {
         match self.conversation.send(connection, scope.clone(), input) {
             Ok(id) => {
                 self.policy_sends.insert(id, draft);
-                let draft = self.composer.draft_mut(scope);
-                draft.text.replace_text("");
-                draft.attachments.clear();
-                draft.replay = None;
+                // Keep attachments and their text editable until the worker
+                // has successfully staged them for this exact submission.
+                if self
+                    .composer
+                    .draft(&scope)
+                    .is_some_and(|draft| draft.attachments.is_empty())
+                {
+                    let draft = self.composer.draft_mut(scope);
+                    draft.text.replace_text("");
+                    draft.replay = None;
+                }
             }
             Err(error) => self.compose_error = Some(error),
         }
@@ -309,6 +316,39 @@ impl Viewer {
                             self.history_loading = false;
                         }
                         self.refresh_chat_search();
+                    }
+                }
+                Update::AttachmentsReady {
+                    scope,
+                    submission_id,
+                } => {
+                    if let Some(sent) = self.policy_sends.get(&submission_id).cloned() {
+                        let stamp = sent.policy_stamp();
+                        if let Some(editor) = self.editor_for_policy_mut(&scope, Some(&stamp)) {
+                            let unchanged = editor.draft(&scope).is_some_and(|current| {
+                                current.text.text == sent.text.text
+                                    && current.replay == sent.replay
+                                    && current.attachments.len() == sent.attachments.len()
+                                    && current
+                                        .attachments
+                                        .iter()
+                                        .zip(&sent.attachments)
+                                        .all(|(a, b)| a.path == b.path && a.name == b.name)
+                            });
+                            if unchanged {
+                                let draft = editor.draft_mut(scope);
+                                draft.text.replace_text("");
+                                draft.attachments.clear();
+                                draft.replay = None;
+                            }
+                        }
+                    }
+                }
+                Update::InputRejected { scope, message, .. } => {
+                    if scope == self.composer_scope() {
+                        self.compose_error = Some(format!(
+                            "{message}. Discard the saved send before choosing another file."
+                        ));
                     }
                 }
                 Update::Admitted {
@@ -471,6 +511,7 @@ impl Viewer {
                 self.compose_error = Some(error);
             } else {
                 self.discard_send_confirm = None;
+                self.policy_sends.remove(&id);
                 self.refresh_recoverable();
             }
         }

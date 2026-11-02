@@ -1643,3 +1643,82 @@ fn large_documents_require_a_gateway_with_large_frame_support() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn oversized_legacy_attachment_is_rejected_before_policy_or_upload_and_retained() {
+    let root =
+        std::env::temp_dir().join(format!("herune-legacy-attachment-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("large.pdf");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(6 * 1024 * 1024)
+        .unwrap();
+    let attachment = AttachmentInput {
+        path,
+        name: "large.pdf".into(),
+    };
+    assert!(validate_transfer_limits(&[attachment.clone()], false, false).is_err());
+    assert!(validate_transfer_limits(&[attachment.clone()], true, false).is_ok());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let create = request(&mut ws, "session.create");
+        answer(&mut ws, &create, snapshot(false, 0));
+        ws.get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        assert!(
+            ws.read().is_err(),
+            "no policy, upload, or prompt mutation is allowed"
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Keep this message".into(),
+            attachments: vec![attachment],
+            approval_mode: Some("smart".into()),
+            approval_changed: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut worker, replies) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    let error = worker
+        .submit(entry, &journal)
+        .unwrap()
+        .expect("local preflight refusal");
+    assert!(error.contains("5 MiB"), "{error}");
+    let retained = journal.load(&id).unwrap();
+    assert_eq!(retained.input.text, "Keep this message");
+    assert!(!retained.attempted && retained.mutations.is_empty());
+    assert!(
+        replies
+            .try_iter()
+            .all(|reply| !matches!(reply, Reply::Snapshot { .. })),
+        "a rejected fresh input must not bind an unpersisted session"
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}

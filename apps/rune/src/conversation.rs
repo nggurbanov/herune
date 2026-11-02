@@ -213,6 +213,15 @@ pub enum Update {
         policy_stamp: Option<PolicyStamp>,
         policy_fields: PolicyFields,
     },
+    AttachmentsReady {
+        scope: DraftScope,
+        submission_id: String,
+    },
+    InputRejected {
+        scope: DraftScope,
+        submission_id: String,
+        message: String,
+    },
     Failed {
         scope: DraftScope,
         message: String,
@@ -257,6 +266,15 @@ impl Conversation {
             .get(scope)
             .cloned()
             .unwrap_or_else(|| scope.clone())
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_attachments_ready(&self, origin: DraftScope, id: &str) {
+        self.replies
+            .send(worker::Reply::AttachmentsReady {
+                origin,
+                id: id.into(),
+            })
+            .unwrap();
     }
     #[cfg(test)]
     pub(crate) fn fixture_queue_failure(
@@ -933,6 +951,8 @@ impl Conversation {
                 | worker::Reply::Workspace { origin, .. }
                 | worker::Reply::Snapshot { origin, .. }
                 | worker::Reply::Admitted { origin, .. }
+                | worker::Reply::AttachmentsReady { origin, .. }
+                | worker::Reply::InputRejected { origin, .. }
                 | worker::Reply::Event { origin, .. }
                 | worker::Reply::Failed { origin, .. }
                 | worker::Reply::Recovered { origin, .. }
@@ -1214,6 +1234,28 @@ impl Conversation {
                         }
                         updates.push(Update::Changed { scope });
                     }
+                }
+                worker::Reply::AttachmentsReady { origin, id } => {
+                    updates.push(Update::AttachmentsReady {
+                        scope: self.key(&origin),
+                        submission_id: id,
+                    });
+                }
+                worker::Reply::InputRejected {
+                    origin,
+                    id,
+                    message,
+                } => {
+                    let scope = self.key(&origin);
+                    let view = self.views.entry(scope.clone()).or_default();
+                    view.preparing = false;
+                    view.uncertain = Some(id.clone());
+                    view.error = Some(message.clone());
+                    updates.push(Update::InputRejected {
+                        scope,
+                        submission_id: id,
+                        message,
+                    });
                 }
                 worker::Reply::Failed {
                     origin,

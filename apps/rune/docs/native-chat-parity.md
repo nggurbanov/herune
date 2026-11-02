@@ -367,3 +367,19 @@ private model fixture and received a reply. The binary SHA-256 was
 `4530ebb9678b1312be0a471675d26c4a9affc9286f30be0e42b7eb1f4ec0b801`.
 This does not establish macOS or real-provider behavior. Evidence is in
 `standalone-desktop-artifacts/oversize-draft-20261102/`.
+
+A later fix also covers a lower limit discovered only after connecting. Drafts
+with files remain in their captured editor until staging succeeds; completion
+clears them only if the text and attachments are unchanged. A local preflight
+refusal precedes rewinds, policy changes and uploads and leaves the saved send
+for explicit discard, so a missing or oversized file can be removed without
+losing the message. The editor is not rebound to a new lazy session before a
+rejection. Unknown network outcomes retain the saved-send recovery behavior.
+
+Linux native tests used pinned Hermes with a synthetic local model. A test-only
+v4 contract override rejected a 6 MiB file while retaining the draft; after
+explicit discard and file removal the text was sent in both a new ordinary chat
+and a new Bot Chat. An unmodified v8 gateway accepted a 6 MiB file byte-for-byte.
+The final source suite passed 970 tests, with 15 ignored. These checks do not
+establish macOS or real-provider behavior. Evidence:
+`standalone-desktop-artifacts/attachment-draft-preflight-20261102/`.
