@@ -392,3 +392,56 @@ fn model_picker_renders_empty_and_error_virtual_rows() {
     assert!(rt.find("model-results-empty").is_some());
     assert!(rt.find("model-results-error").is_some());
 }
+
+#[test]
+fn recovered_stream_clears_only_its_own_connection_error() {
+    let mut viewer = Viewer::empty();
+    viewer.selected_session = Some("stored".into());
+    let scope = viewer.composer_scope();
+    viewer
+        .conversation
+        .fixture(scope.clone(), &serde_json::json!({}))
+        .unwrap();
+    viewer
+        .conversation
+        .fixture_queue_failure(scope.clone(), "connection lost", true, None);
+    viewer.poll_conversations();
+    assert_eq!(viewer.compose_error.as_deref(), Some("connection lost"));
+    viewer.conversation.fixture_queue_recovered(scope.clone());
+    viewer.poll_conversations();
+    assert_eq!(viewer.compose_error, None);
+
+    viewer
+        .conversation
+        .fixture_queue_failure(scope.clone(), "connection lost", true, None);
+    viewer.poll_conversations();
+    viewer.compose_error = Some("different error".into());
+    viewer.conversation.fixture_queue_recovered(scope.clone());
+    viewer.poll_conversations();
+    assert_eq!(viewer.compose_error.as_deref(), Some("different error"));
+
+    viewer.conversation.fixture_queue_failure(
+        scope.clone(),
+        "send uncertain",
+        false,
+        Some("send-id".into()),
+    );
+    viewer.poll_conversations();
+    viewer
+        .conversation
+        .fixture_queue_failure(scope.clone(), "connection lost again", true, None);
+    viewer.poll_conversations();
+    assert_eq!(viewer.compose_error.as_deref(), Some("send uncertain"));
+    viewer.conversation.fixture_queue_recovered(scope.clone());
+    viewer.poll_conversations();
+    assert_eq!(viewer.compose_error.as_deref(), Some("send uncertain"));
+    assert_eq!(
+        viewer
+            .conversation
+            .view(&scope)
+            .unwrap()
+            .uncertain
+            .as_deref(),
+        Some("send-id")
+    );
+}

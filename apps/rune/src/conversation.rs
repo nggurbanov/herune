@@ -138,6 +138,7 @@ pub struct ConversationView {
     pub workspace_pending: bool,
     pub workspace_uncertain: bool,
     pub error: Option<String>,
+    stream_error: Option<String>,
     pub uncertain: Option<String>,
     pub model_confirmation: Option<ModelConfirmation>,
     pub canonical_bot: bool,
@@ -180,6 +181,10 @@ pub enum Update {
     },
     StreamOpened {
         scope: DraftScope,
+    },
+    StreamRecovered {
+        scope: DraftScope,
+        error: String,
     },
     NoticeEvent {
         scope: DraftScope,
@@ -252,6 +257,47 @@ impl Conversation {
             .get(scope)
             .cloned()
             .unwrap_or_else(|| scope.clone())
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_queue_failure(
+        &self,
+        origin: DraftScope,
+        message: &str,
+        stream_loss: bool,
+        id: Option<String>,
+    ) {
+        self.replies
+            .send(worker::Reply::Failed {
+                origin,
+                id,
+                message: message.into(),
+                uncertain: !stream_loss,
+                stream_loss,
+            })
+            .unwrap();
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_queue_recovered(&self, origin: DraftScope) {
+        let session = origin.session.clone().unwrap();
+        let snapshot = crate::gateway::conversation::Snapshot {
+            metadata: serde_json::json!({}),
+            runtime: session.clone(),
+            stored: session,
+            canonical: true,
+            revision: 1,
+            generation: 1,
+            authority: 1,
+            running: true,
+            epoch: "fixture".into(),
+            sequence: 0,
+            prompts: vec![],
+            pending: vec![],
+            info: serde_json::json!({}),
+            messages: vec![],
+        };
+        self.replies
+            .send(worker::Reply::Recovered { origin, snapshot })
+            .unwrap();
     }
     #[cfg(test)]
     pub(crate) fn fixture_queue_event(
@@ -999,7 +1045,16 @@ impl Conversation {
                         self.workspaces.remove(&scope);
                     }
                     let view = self.views.entry(scope.clone()).or_default();
+                    let recovered_error = view.stream_error.take().filter(|error| {
+                        view.error.as_ref() == Some(error) && view.uncertain.is_none()
+                    });
                     view.install(snapshot, history);
+                    if let Some(error) = recovered_error {
+                        updates.push(Update::StreamRecovered {
+                            scope: scope.clone(),
+                            error,
+                        });
+                    }
                     if folder_confirmed {
                         view.workspace_uncertain = false;
                     }
@@ -1165,12 +1220,18 @@ impl Conversation {
                     id,
                     message,
                     uncertain,
+                    stream_loss,
                 } => {
                     let key = self.key(&origin);
                     let view = self.views.entry(key).or_default();
+                    // A transport retry must not hide an unresolved send receipt.
+                    if stream_loss && id.is_none() && view.uncertain.is_some() {
+                        continue;
+                    }
                     if id.is_some() {
                         view.preparing = false;
                     }
+                    view.stream_error = stream_loss.then(|| message.clone());
                     view.error = Some(message.clone());
                     if id.is_some() {
                         view.uncertain = id;
@@ -1223,7 +1284,16 @@ impl Conversation {
                     view.metadata = snapshot.metadata;
                     view.prompts = snapshot.prompts;
                     view.admissions = snapshot.pending;
+                    let recovered_error = view.stream_error.take().filter(|error| {
+                        view.error.as_ref() == Some(error) && view.uncertain.is_none()
+                    });
                     view.error = None;
+                    if let Some(error) = recovered_error {
+                        updates.push(Update::StreamRecovered {
+                            scope: key.clone(),
+                            error,
+                        });
+                    }
                     for admission in &view.admissions {
                         if !admission.input_id.is_empty() {
                             view.submitted.insert(admission.input_id.clone());

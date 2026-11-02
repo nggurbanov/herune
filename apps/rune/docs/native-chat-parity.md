@@ -168,3 +168,35 @@ history hydration.
 Original contracts: `src/api/canonical-protocol.ts`, `app/chat/transcript-backfill.ts`,
 `lib/chat-messages.ts`, `app/session/hooks/use-prompt-actions`, and
 `components/assistant-ui/thread` under the retained `apps/desktop` baseline.
+
+## Stream reconnection after a prolonged interruption
+
+The worker now keeps retrying a lost stream while its conversation owner remains
+alive, with backoff from two seconds to a maximum of 30 seconds. Reconnection
+only resumes and reads the captured conversation; it never resends an uncertain
+user submission. A recovered stream clears its own displayed connection error
+without clearing unrelated errors or a retained uncertain-send warning.
+
+A private loopback WebSocket regression passed through an established session,
+two failed reconnect handshakes and reattachment to the same profile and stored
+session, checking that no prompt is sent. A separate test exercises repeated
+failures, bounded delay, and non-retry of a failed submission; another drives the
+Viewer update path for recovery and retained errors. The exact-source Linux Rust
+suite passed 954 tests with 15 ignored, and `cargo fmt --check` passed.
+
+A follow-up covers opening an existing conversation while the gateway is down:
+transport failures retry with the same profile and session; an explicit RPC
+refusal stops automatic retries and remains visible. The two scenarios passed
+against private loopback sockets, alongside the existing ownership tests. The
+final Linux Rust suite passed 956 tests with 15 ignored, and formatting passed.
+
+Before that follow-up, a Linux native-window run used the pinned real Hermes gateway in a private
+profile and a deterministic local model stub. After a completed first turn, the
+owned gateway was stopped for more than nine seconds and restarted. The same
+stored conversation reattached, its connection error cleared, and a second turn
+completed; each user message appeared once. Evidence, including failed harness
+attempts and process identities, is under `/tmp/herune-reconnect-real-check/`.
+This tests an idle conversation across a gateway restart, not interruption during
+an active generation, a real model provider, or macOS. The pinned legacy
+gateway's profile-unsafe sidebar live-status incompatibility remains open; see
+`capabilities-mac-handoff.md`.

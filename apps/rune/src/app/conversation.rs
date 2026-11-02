@@ -228,6 +228,12 @@ impl Viewer {
                     self.notifications.stream_opened(&scope);
                     self.background.stream_opened(&scope);
                 }
+                Update::StreamRecovered { scope, error } => {
+                    if scope == self.composer_scope() && self.compose_error.as_ref() == Some(&error)
+                    {
+                        self.compose_error = None;
+                    }
+                }
                 Update::NoticeEvent {
                     scope,
                     kind,

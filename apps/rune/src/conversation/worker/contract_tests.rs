@@ -79,6 +79,49 @@ pub(super) fn worker(connection: Connection, scope: DraftScope) -> (Worker, Rece
 }
 
 #[test]
+fn stream_reconnect_survives_a_long_outage_without_retrying_mutations() {
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 7,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let (replies, receive) = mpsc::channel();
+    let mut worker = Worker {
+        connection: Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        },
+        stored: scope.session.clone(),
+        scope,
+        replies,
+        waker: Arc::new(|| {}),
+        transport: None,
+        epoch: String::new(),
+        last: 0,
+        reconnect_at: Instant::now(),
+        reconnect_attempts: 0,
+        want_reconnect: false,
+    };
+    for _ in 0..300 {
+        worker.failure(None, "disconnected".into(), true);
+        assert!(worker.want_reconnect);
+        assert!(worker.reconnect_at.duration_since(Instant::now()) <= Duration::from_secs(30));
+    }
+    assert!(
+        receive
+            .try_iter()
+            .all(|reply| matches!(reply, Reply::Failed { id: None, .. }))
+    );
+    worker.failure(Some("send-id".into()), "uncertain send".into(), false);
+    assert!(!worker.want_reconnect);
+    assert!(
+        matches!(receive.try_recv(), Ok(Reply::Failed { id: Some(id), .. }) if id == "send-id")
+    );
+}
+
+#[test]
 fn real_gui_create_files_permission_readback_admission_and_stream_are_one_owned_cycle() {
     let root = std::env::temp_dir().join(format!("hermes-rune-cycle-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();

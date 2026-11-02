@@ -104,6 +104,7 @@ pub(crate) enum Reply {
         id: Option<String>,
         message: String,
         uncertain: bool,
+        stream_loss: bool,
     },
     ClarifyLocked {
         origin: DraftScope,
@@ -234,20 +235,28 @@ impl Worker {
         let snapshot = self.transport()?.resume(&stored)?;
         self.attached(snapshot)
     }
+    fn attach_failed(&mut self, error: CallError) {
+        // Retry transport failures, but do not repeatedly resume a session the
+        // gateway has explicitly refused (for example, a deleted session).
+        let retry = self.stored.is_some() && error.code.is_none();
+        self.failure(None, error, retry);
+    }
     fn failure(&mut self, id: Option<String>, error: CallError, retry_stream: bool) {
-        self.reconnect_attempts += 1;
-        self.want_reconnect = retry_stream && self.reconnect_attempts < 3;
+        self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
+        self.want_reconnect = retry_stream;
         let uncertain = error.uncertain;
         self.notify(Reply::Failed {
             origin: self.scope.clone(),
             id,
             message: error.message,
             uncertain,
+            stream_loss: retry_stream,
         });
         // A timed-out response is never consumed by another request. Reattach
         // on a new socket; no mutation or input is replayed by reconnection.
         self.transport = None;
-        self.reconnect_at = Instant::now() + Duration::from_secs(2);
+        let delay = (2_u64 << self.reconnect_attempts.saturating_sub(1).min(4)).min(30);
+        self.reconnect_at = Instant::now() + Duration::from_secs(delay);
     }
     fn submit(&mut self, mut entry: Prepared, journal: &Journal) -> Result<(), CallError> {
         let claim = journal.claim(&entry.submission_id)?;
@@ -456,6 +465,7 @@ impl Worker {
                         error.message
                     ),
                     uncertain: error.uncertain,
+                    stream_loss: false,
                 });
             }
         }
@@ -465,6 +475,7 @@ impl Worker {
                 id: None,
                 message: error,
                 uncertain: false,
+                stream_loss: false,
             });
         }
         Ok(())
@@ -1012,7 +1023,7 @@ pub(crate) fn spawn(
                 Ok(Command::Attach) => {
                     worker.reconnect_attempts = 0;
                     if let Err(error) = worker.attach() {
-                        worker.failure(None, error, false);
+                        worker.attach_failed(error);
                     }
                 }
                 Ok(Command::Send(entry, journal)) => {
@@ -1044,7 +1055,7 @@ pub(crate) fn spawn(
                     && Instant::now() >= worker.reconnect_at
                 {
                     if let Err(error) = worker.attach() {
-                        worker.failure(None, error, true);
+                        worker.attach_failed(error);
                     }
                 }
                 continue;
@@ -1238,6 +1249,7 @@ pub(crate) fn control(
                 id: None,
                 message: error.message,
                 uncertain: error.uncertain,
+                stream_loss: false,
             },
         };
         if replies.send(reply).is_ok() {
