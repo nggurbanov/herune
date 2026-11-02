@@ -194,3 +194,20 @@ the backend configuration. The first UI attempt failed to reach an off-screen
 optional arguments field; the second omitted that field and passed. This check
 covers the common stdio form only, not editing, custom headers, or macOS.
 Evidence: `standalone-desktop-artifacts/mcp-native-20261102/concurrent-add/`.
+
+### Plugin storage across windows (2026-11-02)
+
+Desktop plugin `ctx.storage` now sends each changed key instead of sending an
+entire localStorage snapshot. The native host merges those changes under a
+cross-process file lock and atomically writes the merged document. Independent
+keys from two windows therefore survive either save order, including when the
+windows close; malformed state is preserved instead of overwritten. The
+existing per-source storage identity remains unchanged.
+
+SDK tests reproduced the stale snapshot overwriting a newer key before the
+change. Native manager and concurrent-file tests cover disjoint writes,
+deletion and corrupt input. An isolated Linux Wry window exercised the actual
+SDK bridge with the new storage event. The existing CSS is carried forward
+byte-for-byte. This is not live synchronization between already-open windows:
+concurrent writes to the same key still resolve by save order, including the
+shared plugin-decision object. macOS behavior was not tested here.

@@ -14,7 +14,7 @@ describe('SDK runtime with native IPC transport', () => {
     const runtime = createInstalledPluginRuntime(services.context, modules)
     await runtime.load('fixture', 'synthetic')
     expect(services.registry.getArea('panes')[0].id).toBe('example:panel')
-    expect(messages[0].values['hermes.plugin.example.count']).toBe('1')
+    expect(messages[0]).toMatchObject({type:'plugin-storage-patch', key:'hermes.plugin.example.count', value:'1'})
     services.feedEvent({ type: 'change', profile: 'p' }); expect(calls).toBe(0)
     services.feedEvent({ type: 'change', profile: 'p', connectionId: 'a' }); expect(calls).toBe(1)
     runtime.unload('example'); services.feedEvent({ type: 'change', profile: 'p', connectionId: 'a' })

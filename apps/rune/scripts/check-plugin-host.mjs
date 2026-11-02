@@ -108,8 +108,8 @@ function onEvent(event) {
       require(event.value.profile === 'research' && event.value.method === 'native.proof', 'The RPC bridge changed its owner or response')
       rpc = true
       break
-    case 'plugin-storage':
-      if (event.values['hermes.plugin.native-sdk-proof.clicks'] === '1') stored = true
+    case 'plugin-storage-patch':
+      if (event.key === 'hermes.plugin.native-sdk-proof.clicks' && event.value === '1') stored = true
       break
     case 'proof-event':
       require(event.event.profile === 'research', 'Event ownership was lost')

@@ -2,13 +2,12 @@ import type { NativeBridge } from './bridge'
 const allowed = (key: string) => key.startsWith('hermes.plugin.') || key === 'hermes.desktop.pluginDecisions.v2' || key === 'hermes.desktop.disabledPlugins.v1'
 /** Existing native manager restores this snapshot before loading the document. */
 export function createStorage(bridge: NativeBridge, storage: Storage) {
-  const snapshot = () => Object.fromEntries(Object.keys(storage).filter(allowed).map(key => [key, storage.getItem(key)]))
   return {
     readKey(key: string) { if (!allowed(key)) throw new Error('Invalid plugin storage key'); return storage.getItem(key) },
     writeKey(key: string, value: string | null) {
       if (!allowed(key)) throw new Error('Invalid plugin storage key')
       if (value === null) storage.removeItem(key); else storage.setItem(key, value)
-      bridge.emit({ type: 'plugin-storage', values: snapshot() })
+      bridge.emit({ type: 'plugin-storage-patch', key, value })
     }
   }
 }
