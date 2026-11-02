@@ -244,3 +244,18 @@ once; all known app and gateway processes exited. These checks do not establish
 compatibility with real provider accounts or macOS. Evidence is retained under
 `standalone-desktop-artifacts/model-existing-20261102/` and
 `standalone-desktop-artifacts/provider-switch-native-20261102/`.
+
+## Concurrent ordinary conversations
+
+On 2026-11-02 a Linux native-window run used the pinned real Hermes gateway with
+a private local model stub that held two streaming replies independently. Two
+ordinary sessions on the same profile ran concurrently. Switching between them
+retained their separate drafts; stopping the first left the second stream open,
+and the second then completed with its draft preserved. Both histories were
+reopened without the other conversation's user message. The stopped chat's draft
+was deliberately cleared before pressing Stop because the composer shows Send
+while a draft is present. All known app and gateway processes exited.
+
+This is one source, one profile and a synthetic model provider, not proof of
+cross-profile or real-provider behavior or macOS acceptance. The native evidence
+is at `standalone-desktop-artifacts/parallel-sessions-native-20261102/`.
