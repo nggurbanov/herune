@@ -636,3 +636,17 @@ must release only the just-created file. Once attached, cleanup requires proving
 that no persisted draft or send journal refers to the file, including across
 windows; no broad directory cleanup is implemented. The shared composer view is
 owned by the Mac lane and still requires coordination and native acceptance.
+
+### Native search across two profiles (2026-11-02)
+
+A Linux native-window run used the pinned real Hermes gateway and two isolated
+profiles. Each profile had 65 newer conversations and an older conversation
+with the same stored ID; their message content identified the owner. Searching
+for text shared by both found both old rows, and opening each loaded the correct
+profile's history. No model prompt was sent. The executable SHA-256 was
+`ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`;
+this is the previous search build, before the later root-running status and
+clipboard staging changes. Evidence:
+`standalone-desktop-artifacts/sidebar-multiprofile-native-20261102/result.json`.
+The run covers two profiles on one source, not multiple gateways, NativeSelf,
+project-overview behavior or macOS.
