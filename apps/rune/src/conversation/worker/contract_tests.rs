@@ -1933,3 +1933,72 @@ fn previously_attempted_legacy_send_still_reads_authoritative_history() {
     server.join().unwrap();
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn fresh_legacy_retry_rejects_changed_stored_owner_before_upload() {
+    let root = std::env::temp_dir().join(format!("herune-owner-retry-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(700)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["stored_session_id"] = json!("other-stored");
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        answer(&mut ws, &resume, state);
+        ws.read().ok().map(|frame| frame.to_string())
+    });
+    let fresh = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: None,
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Keep this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    let result = worker.submit(entry, &journal);
+    assert!(result.is_err());
+    assert_eq!(journal.load(&id).unwrap().stored.as_deref(), Some("stored"));
+    drop(worker);
+    assert!(
+        server.join().unwrap().is_none(),
+        "no second request may reach the foreign session"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -400,3 +400,11 @@ pinned Hermes gateway, then retried through the UI: the file bytes and text
 arrived, one user message was stored, and the synthetic local model replied.
 This does not establish macOS or real-provider behavior. Evidence:
 `standalone-desktop-artifacts/attachment-retry-native-20261102/`.
+
+A follow-up fences this recovery before the journal is rewritten: if a newly
+created legacy chat is resumed as a different stored ID before the first send,
+the original saved input remains intact and no upload or prompt is issued.
+Snapshots that explicitly identify another profile are refused; an omitted
+profile remains compatible with older gateways. Existing chats can still follow
+server-resolved compression continuations. Private socket and parser tests
+cover the owner refusal; they do not establish malicious-server or macOS behavior.

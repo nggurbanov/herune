@@ -81,11 +81,14 @@ impl Snapshot {
             .to_owned();
         valid_scope(&stored)?;
         let info = value.get("info").cloned().unwrap_or_else(|| json!({}));
-        if canonical
-            && profile.is_some_and(|profile| {
-                info.get("profile_name").and_then(Value::as_str) != Some(profile)
-            })
-        {
+        let returned_profile = info.get("profile_name").and_then(Value::as_str);
+        if profile.is_some_and(|profile| {
+            if canonical {
+                returned_profile != Some(profile)
+            } else {
+                returned_profile.is_some_and(|owner| !owner.is_empty() && owner != profile)
+            }
+        }) {
             return Err("Session snapshot profile identity mismatch".into());
         }
         if canonical
@@ -692,6 +695,14 @@ mod tests {
             assert_eq!(snapshot.runtime, "live-handle");
             assert_eq!(snapshot.stored, "stored-history");
         }
+    }
+
+    #[test]
+    fn legacy_snapshot_refuses_explicit_foreign_profile_but_accepts_missing_owner() {
+        let mut value = json!({"session_id":"live","stored_session_id":"stored","info":{"profile_name":"other"}});
+        assert!(Snapshot::parse(&value, "work", false).is_err());
+        value["info"] = json!({});
+        assert!(Snapshot::parse(&value, "work", false).is_ok());
     }
 
     #[test]

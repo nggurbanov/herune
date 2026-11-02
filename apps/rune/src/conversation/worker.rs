@@ -336,6 +336,20 @@ impl Worker {
             let params = create_params(&entry, canonical);
             (self.transport()?.create(params)?, true)
         };
+        // A fresh legacy send has not produced a turn, so its minted stored
+        // identity cannot legitimately advance to a compression continuation.
+        // Check before replacing the journal's original owner or staging files.
+        if !canonical
+            && entry.session.is_none()
+            && !entry.attempted
+            && !entry.legacy_attempted
+            && entry
+                .stored
+                .as_deref()
+                .is_some_and(|id| id != snapshot.stored)
+        {
+            return Err("The new conversation returned a different stored session; the saved message was retained".into());
+        }
         entry.runtime = Some(snapshot.runtime.clone());
         entry.stored = Some(snapshot.stored.clone());
         journal.save(&entry)?;
