@@ -639,7 +639,12 @@ impl SessionTransport {
                 .collect(),
         ))
     }
-    pub fn replay_media(&mut self, source: &str, stored: &str) -> Result<Value, CallError> {
+    pub fn replay_media(
+        &mut self,
+        source: &str,
+        stored: &str,
+        image: bool,
+    ) -> Result<Value, CallError> {
         self.ensure_profiles()?;
         let source = if source.starts_with("file:") {
             url::Url::parse(source)
@@ -651,17 +656,29 @@ impl SessionTransport {
         } else {
             source.into()
         };
-        let request = if source.starts_with("http://") || source.starts_with("https://") {
-            crate::pages::PageRequest::get("/api/media/proxy").query("url", source)
+        let remote = source.starts_with("http://") || source.starts_with("https://");
+        let request = if remote {
+            crate::pages::PageRequest::get("/api/media/proxy").query("url", &source)
         } else {
             crate::pages::PageRequest::get("/api/fs/read-data-url")
-                .query("path", source)
+                .query("path", &source)
                 .query("session_id", stored)
         };
         let request = self.owned_request(request);
-        self.gateway
-            .page_request(&self.profile, &request)
-            .map_err(CallError::from)
+        match self.gateway.page_request(&self.profile, &request) {
+            Err(error) if image && !remote && error == "Workspace request refused (HTTP 413)" => {
+                let fallback = self.owned_request(
+                    crate::pages::PageRequest::get("/api/fs/download")
+                        .query("path", &source)
+                        .query("session_id", stored)
+                        .image_download(),
+                );
+                self.gateway
+                    .page_request(&self.profile, &fallback)
+                    .map_err(CallError::from)
+            }
+            result => result.map_err(CallError::from),
+        }
     }
     pub fn upload_image(&mut self, data_url: String, name: &str) -> Result<Value, CallError> {
         self.ensure_profiles()?;

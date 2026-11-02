@@ -508,3 +508,15 @@ subsequent edit and submission. The former 5 MiB rejection was reproduced first.
 The agent's read-data-url limit can still prevent recovery of larger remote
 files; this test does not establish every gateway version, real-model behavior,
 or macOS acceptance. Clipboard image paste remains a separate open feature.
+
+For a stored image whose data-URL read returns HTTP 413, replay now retries the
+same profile/session-owned path through the authenticated file-download route.
+Only a complete HTTP 200 response with a verified length of at most 25 MiB and
+a recognized image signature is accepted; a refusal, partial response or
+invalid body leaves history unchanged. Other read failures do not trigger this
+fallback. A synthetic gateway exercised the full 17 MiB edit and exact upload;
+partial, oversized, unknown-length and invalid-image responses were rejected.
+An isolated invocation of pinned Hermes itself confirmed upload 200, data-URL
+read 413 and byte-exact download 200 for a 17 MiB image with an isolated stored
+session. These checks do not establish real-provider, locked-hosted-server or
+macOS acceptance.

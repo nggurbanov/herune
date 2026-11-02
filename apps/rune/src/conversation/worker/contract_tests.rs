@@ -1132,12 +1132,12 @@ fn lost_rewind_receipt_retries_exact_identity_and_fences_even_after_revision_adv
 
 #[test]
 fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_owned_turn() {
-    // The composer accepts images above 5 MiB; editing a turn must retain them too.
-    let mut image = vec![0x51; 7 * 1024 * 1024];
+    // The composer accepts images above the server’s 16 MiB data-URL cap; editing a turn must retain them too.
+    let mut image = vec![0x51; 17 * 1024 * 1024];
     image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
     let expected_image = format!(
         "data:image/png;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(image)
+        base64::engine::general_purpose::STANDARD.encode(&image)
     );
     let root = std::env::temp_dir().join(format!("hermes-multimodal-{}", uuid::Uuid::new_v4()));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1148,7 +1148,7 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(4)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
         let mut ws = tungstenite::accept(stream).unwrap();
         let resume = request(&mut ws, "session.resume");
@@ -1156,7 +1156,7 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
         history(&listener, json!([]));
         let (mut download, _) = listener.accept().unwrap();
         download
-            .set_read_timeout(Some(Duration::from_secs(4)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
         let mut reader = BufReader::new(&mut download);
         let mut request_line = String::new();
@@ -1171,11 +1171,33 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
                 break;
             }
         }
-        let response = json!({"dataUrl": expected_image}).to_string();
-        write!(download, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+        write!(
+            download,
+            "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
         drop(download);
+        let (mut raw, _) = listener.accept().unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let mut reader = BufReader::new(&mut raw);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        assert!(request_line.starts_with("GET /api/fs/download?"));
+        assert!(request_line.contains("profile=work"));
+        assert!(request_line.contains("session_id=stored"));
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        write!(raw, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", image.len()).unwrap();
+        std::io::Write::write_all(&mut raw, &image).unwrap();
+        drop(raw);
         let (mut http, _) = listener.accept().unwrap();
-        http.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        http.set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
         let mut reader = BufReader::new(&mut http);
         let mut headers = String::new();
         let mut length = 0;

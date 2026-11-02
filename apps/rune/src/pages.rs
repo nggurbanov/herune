@@ -76,6 +76,7 @@ pub struct PageRequest {
     pub provenance: Option<crate::gateway::prepared::ProfileProvenance>,
     pub timeout: u64,
     pub destination: Option<std::path::PathBuf>,
+    pub(crate) image_download: bool,
     pub connection: Option<Connection>,
     pub source_lease: Option<crate::connections::Lease>,
     // Hold the originating actor through the actual I/O and final receipt.
@@ -96,6 +97,7 @@ impl PageRequest {
             provenance: None,
             timeout: 30,
             destination: None,
+            image_download: false,
             connection: None,
             source_lease: None,
             source_resolver: None,
@@ -167,6 +169,10 @@ impl PageRequest {
     }
     pub fn edit_claim(mut self, claim: Arc<crate::client::FileLock>) -> Self {
         self.edit_claim = Some(claim);
+        self
+    }
+    pub(crate) fn image_download(mut self) -> Self {
+        self.image_download = true;
         self
     }
     pub fn download_to(mut self, path: std::path::PathBuf) -> Self {

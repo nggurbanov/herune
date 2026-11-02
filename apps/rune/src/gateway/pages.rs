@@ -12,6 +12,15 @@ impl Gateway {
         mut on_event: impl FnMut(Value),
     ) -> Result<Value, String> {
         valid_scope(profile)?;
+        if request.image_download
+            && (!matches!(request.method, PageMethod::Get)
+                || request.path != "/api/fs/download"
+                || request.destination.is_some()
+                || request.upload.is_some()
+                || !request.body.is_null())
+        {
+            return Err("Invalid image recovery request".into());
+        }
         let deadline = Instant::now() + Duration::from_secs(request.timeout);
         let provenance = request
             .provenance
@@ -217,6 +226,44 @@ impl Gateway {
                 "Workspace request refused (HTTP {})",
                 response.status().as_u16()
             ));
+        }
+        if request.image_download {
+            use base64::Engine;
+            if response.status() != reqwest::StatusCode::OK {
+                return Err("The stored image response is incomplete".into());
+            }
+            let limit = MAX_CHAT_ATTACHMENT_BYTES;
+            let length = response
+                .content_length()
+                .ok_or("The stored image has no verifiable length")?;
+            if length > limit as u64 {
+                return Err("The stored image exceeds the 25 MiB replay limit".into());
+            }
+            let mut bytes = Vec::new();
+            response
+                .take((limit + 1) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "The stored image could not be read")?;
+            if bytes.len() > limit {
+                return Err("The stored image exceeds the 25 MiB replay limit".into());
+            }
+            if bytes.len() as u64 != length {
+                return Err("The stored image response is incomplete".into());
+            }
+            let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+                "image/png"
+            } else if bytes.starts_with(b"\xff\xd8\xff") {
+                "image/jpeg"
+            } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+                "image/gif"
+            } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+                "image/webp"
+            } else {
+                return Err("The stored image has an unsupported format".into());
+            };
+            return Ok(
+                json!({"dataUrl": format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))}),
+            );
         }
         let response_limit = if request.path == "/api/fs/read-data-url" {
             48 * 1024 * 1024

@@ -450,3 +450,52 @@ fn legacy_live_scope_refusal_is_narrow_and_redacts_other_server_errors() {
     drop(gateway);
     server.join().unwrap();
 }
+
+#[test]
+fn replay_image_download_rejects_partial_oversize_and_unverified_body() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/hermes", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let _ws = tungstenite::accept(stream).unwrap();
+        for response in [
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 8\r\nConnection: close\r\n\r\nabcdefgh".to_owned(),
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", MAX_CHAT_ATTACHMENT_BYTES + 1),
+            "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc".to_owned(),
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nabc".to_owned(),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (url, _, headers) = request(&mut stream);
+            assert_eq!(url.path(), "/hermes/api/fs/download");
+            let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
+            assert_eq!(query["profile"], "work");
+            assert_eq!(query["session_id"], "stored");
+            assert!(headers.to_ascii_lowercase().contains("x-hermes-session-token: synthetic-token\r\n"));
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    let mut gateway = Gateway::connect(&Connection::Url {
+        endpoint,
+        token: Some("synthetic-token".into()),
+    })
+    .unwrap();
+    let req = PageRequest::get("/api/fs/download")
+        .query("path", "/private/image.png")
+        .query("session_id", "stored")
+        .image_download();
+    for expected in [
+        "incomplete",
+        "25 MiB",
+        "unsupported format",
+        "no verifiable length",
+    ] {
+        let error = gateway.page_request("work", &req).unwrap_err();
+        assert!(error.contains(expected), "unexpected error: {error}");
+    }
+    assert!(
+        gateway
+            .page_request("work", &PageRequest::get("/api/other").image_download())
+            .is_err()
+    );
+    server.join().unwrap();
+}

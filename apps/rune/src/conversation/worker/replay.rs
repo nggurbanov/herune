@@ -76,8 +76,11 @@ impl Worker {
                 let value = if attachment.source.starts_with("data:") {
                     json!(attachment.source)
                 } else {
-                    self.transport()?
-                        .replay_media(&attachment.source, &snapshot.stored)?
+                    self.transport()?.replay_media(
+                        &attachment.source,
+                        &snapshot.stored,
+                        attachment.image,
+                    )?
                 };
                 let frozen = data_url(&value, attachment.image)?;
                 if attachment.image && !frozen.starts_with("data:image/") {
