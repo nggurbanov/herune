@@ -2283,7 +2283,7 @@ fn first_send_in_existing_empty_lazy_session_uses_confirmed_idle_runtime() {
 }
 
 #[test]
-fn previously_attempted_legacy_send_still_reads_authoritative_history() {
+fn previously_attempted_legacy_send_refreshes_history_without_resending() {
     let root = std::env::temp_dir().join(format!("herune-lazy-attempted-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
     let file = root.join("note.txt");
@@ -2305,14 +2305,10 @@ fn previously_attempted_legacy_send_still_reads_authoritative_history() {
         state["message_count"] = json!(0);
         answer(&mut ws, &resume, state);
         history(&listener, json!([]));
-        let upload = request(&mut ws, "file.attach");
-        answer(
-            &mut ws,
-            &upload,
-            json!({"attached":true,"ref_text":"@file:note.txt"}),
-        );
-        let prompt = request(&mut ws, "prompt.submit");
-        answer(&mut ws, &prompt, json!({"status":"streaming"}));
+        match ws.read() {
+            Ok(Message::Text(frame)) => Some(frame.to_string()),
+            _ => None,
+        }
     });
     let fresh = DraftScope {
         draft_origin: Some(crate::composer::DraftOrigin::new()),
@@ -2338,6 +2334,7 @@ fn previously_attempted_legacy_send_still_reads_authoritative_history() {
     entry.runtime = Some("live".into());
     entry.canonical = Some(false);
     entry.attempted = true;
+    let id = entry.submission_id.clone();
     let journal = Journal::new(root.join("journal")).unwrap();
     journal.save(&entry).unwrap();
     let scope = DraftScope {
@@ -2347,8 +2344,104 @@ fn previously_attempted_legacy_send_still_reads_authoritative_history() {
     };
     let (mut worker, _) = worker(connection, scope);
     worker.transport.as_mut().unwrap().canonical = false;
-    assert!(worker.submit(entry, &journal).unwrap().is_none());
-    server.join().unwrap();
+    let error = worker.submit(entry, &journal).unwrap_err();
+    drop(worker);
+    let unexpected = server.join().unwrap();
+    assert!(
+        error
+            .message
+            .contains("cannot prove whether this turn was sent"),
+        "{error:?}"
+    );
+    assert!(error.uncertain);
+    assert!(
+        unexpected.is_none(),
+        "an uncertain legacy send must not upload or submit again: {unexpected:?}"
+    );
+    assert_eq!(journal.load(&id).unwrap().input.text, "Retry this message");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_lost_submit_ack_refreshes_without_delivering_a_duplicate() {
+    let root = std::env::temp_dir().join(format!("herune-legacy-ack-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut first = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut first, "session.resume");
+        answer(&mut first, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        let prompt = request(&mut first, "prompt.submit");
+        assert_eq!(prompt["params"]["text"], "Only once");
+        // The peer accepts the turn but disconnects before returning a receipt.
+        drop(first);
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut second = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut second, "session.resume");
+        answer(&mut second, &resume, snapshot(false, 0));
+        history(
+            &listener,
+            json!([{"role":"user","content":"Only once","row_id":1}]),
+        );
+        match second.read() {
+            Ok(Message::Text(frame)) => Some(frame.to_string()),
+            _ => None,
+        }
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Only once".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut first, _) = worker(connection.clone(), scope.clone());
+    first.transport.as_mut().unwrap().canonical = false;
+    assert!(first.submit(entry, &journal).unwrap_err().uncertain);
+    drop(first);
+    let saved = journal.load(&id).unwrap();
+    assert!(saved.attempted);
+    let (mut second, replies) = worker(connection, scope);
+    second.transport.as_mut().unwrap().canonical = false;
+    let error = second.submit(saved, &journal).unwrap_err();
+    drop(second);
+    let duplicate = server.join().unwrap();
+    assert!(
+        error.uncertain
+            && error
+                .message
+                .contains("cannot prove whether this turn was sent")
+    );
+    assert!(
+        duplicate.is_none(),
+        "the peer received a second request: {duplicate:?}"
+    );
+    assert!(replies.try_iter().any(|reply| matches!(reply, Reply::Snapshot { history, .. } if history.messages.iter().any(|row| row.content == "Only once"))));
+    assert_eq!(journal.load(&id).unwrap().input.text, "Only once");
     std::fs::remove_dir_all(root).unwrap();
 }
 

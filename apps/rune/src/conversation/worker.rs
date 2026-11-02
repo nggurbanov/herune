@@ -165,6 +165,14 @@ fn connect_scope(connection: &Connection, scope: &DraftScope) -> Result<SessionT
         }
     }
 }
+fn uncertain_legacy_send() -> CallError {
+    CallError {
+        message: "The legacy gateway cannot prove whether this turn was sent. Read the transcript before discarding the saved send; retrying could duplicate it".into(),
+        code: None,
+        data: None,
+        uncertain: true,
+    }
+}
 impl Worker {
     fn notify(&self, reply: Reply) {
         if self.replies.send(reply).is_ok() {
@@ -283,7 +291,7 @@ impl Worker {
         journal.check_current(&entry)?;
         entry.verify_owner(&self.connection, &self.scope)?;
         if entry.legacy_attempted {
-            return Err("The legacy gateway cannot prove whether this turn was sent. Read the transcript before discarding the saved send; retrying could duplicate it".into());
+            return Err(uncertain_legacy_send());
         }
         // Resuming an existing chat receives the gateway greeting. A fresh
         // chat needs a read-only probe before choosing its create format.
@@ -299,6 +307,15 @@ impl Worker {
             return Err(
                 "The gateway protocol changed; review the saved send before retrying".into(),
             );
+        }
+        if !canonical && entry.attempted {
+            // Legacy peers may accept or ignore submission_id without providing
+            // idempotency. Refresh the transcript, but never resend an unknown
+            // admission or stage its attachments a second time.
+            if let Some(snapshot) = resumed.as_ref() {
+                self.attached(snapshot.clone())?;
+            }
+            return Err(uncertain_legacy_send());
         }
         entry.canonical = Some(canonical);
         journal.save(&entry)?;

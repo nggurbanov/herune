@@ -174,6 +174,20 @@ history hydration.
 - Concurrent tiles, multiple independent draft windows and complete native
   subagent rich-media renderer sharing remain separate migration work.
 
+### Uncertain legacy prompt acknowledgement (2026-11-02)
+
+A legacy gateway may accept a `prompt.submit` containing `submission_id` without
+guaranteeing idempotency. If its response is lost, retrying that request could
+send the same message twice. The retained legacy journal now refreshes the
+owner's history and refuses to re-upload or resend an already attempted turn;
+the saved text remains for explicit review. Canonical idempotent recovery stays
+unchanged. Synthetic socket tests cover a peer accepting the first message and
+disconnecting before acknowledgement, plus an already saved turn with an
+attachment. This does not establish real-provider or macOS acceptance.
+The Linux run passed 44 legacy-related tests and 1,019 common tests, with
+16 ignored in the common run. Evidence is retained in
+`standalone-desktop-artifacts/legacy-uncertain-send-20261102/`.
+
 Original contracts: `src/api/canonical-protocol.ts`, `app/chat/transcript-backfill.ts`,
 `lib/chat-messages.ts`, `app/session/hooks/use-prompt-actions`, and
 `components/assistant-ui/thread` under the retained `apps/desktop` baseline.
