@@ -213,3 +213,23 @@ provider behavior, or macOS acceptance. A previous fixture run held an auxiliary
 model request instead of the main stream and is not used as proof. Compact
 native evidence is retained locally at
 `standalone-desktop-artifacts/reconnect-native-20261102/`.
+
+## Short journal transactions and model selection
+
+A journal state read and an owning send could contend for the same short-lived
+file lock. Previously that contention immediately failed the send with the same
+message used for an active claim by another window. State reads and atomic
+writes now serialize; the separate network-spanning claim remains nonblocking and
+still refuses a second owner. A regression reproduced the state-lock failure
+before the fix. The Linux Rust suite passed 957 tests with 15 ignored, including
+the existing cross-process claim checks; `cargo fmt --check` passed.
+
+In a Linux native-window run against the pinned real Hermes gateway and a private
+local OpenAI-compatible fixture, a custom provider advertised two models. The
+user selected the second model and the fixture received that model in the actual
+prompt request; the response completed. A previous run on the prior executable
+failed with a journal-lock message after selection. The separate regression
+establishes the lock race, but one successful repeat does not prove that race
+was the sole cause of the prior failure. The fixture used no real credentials or
+provider; macOS and other provider workflows remain unverified. Evidence for both
+runs is retained at `standalone-desktop-artifacts/model-switch-native-20261102/`.

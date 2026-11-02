@@ -39,10 +39,18 @@ impl Journal {
         let file = options
             .open(self.path(id, suffix)?)
             .map_err(|_| "Saved send ownership could not be opened")?;
-        file.try_lock().map_err(|error| match error {
-            fs::TryLockError::WouldBlock => "Another Hermes window is handling this saved send. Wait for it to finish, then review or retry.".to_owned(),
-            fs::TryLockError::Error(_) => "Saved send ownership could not be locked".to_owned(),
-        })?;
+        if suffix == "state-lock" {
+            // Reads and atomic writes hold this lock only for a local transaction.
+            // They may overlap the owning worker in the same window.
+            file.lock()
+                .map_err(|_| "Saved send state could not be locked")?;
+        } else {
+            // A claim spans network work and must never wait behind another owner.
+            file.try_lock().map_err(|error| match error {
+                fs::TryLockError::WouldBlock => "Another Hermes window is handling this saved send. Wait for it to finish, then review or retry.".to_owned(),
+                fs::TryLockError::Error(_) => "Saved send ownership could not be locked".to_owned(),
+            })?;
+        }
         Ok(FileLock::from_locked(file))
     }
     /// This guard can move to a worker. Process exit releases the claim; no timer
