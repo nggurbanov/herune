@@ -333,3 +333,21 @@ contained the document reference. The tested binary SHA-256 was
 `2d0bb81f5215894569a6c203131b4fe2d819d3f4dea6515777b7c4783d3b9e01`.
 This does not prove macOS or real-provider behavior. Evidence is in
 `standalone-desktop-artifacts/large-chat-document-20261102/`.
+
+## Preserve drafts when an attachment is too large (2026-11-02)
+
+The universal 25 MiB attachment limit is now checked before creating a saved
+send or clearing the composer. A larger selected file leaves the original text
+and attachment in the editor, with an error so the user can remove the file.
+A regression in an isolated child process reproduced the previous empty
+composer and now verifies retained text, removable attachment and no saved
+send. Worker-side validation still handles changed files and lower limits on
+older gateways; those later failures retain the existing saved-send recovery.
+
+The Linux common suite passed 965 tests with 15 ignored. A native Linux run
+using the GTK chooser and pinned Hermes gateway selected an oversized file,
+confirmed no model request, removed it, then submitted the unchanged text to a
+private model fixture and received a reply. The binary SHA-256 was
+`4530ebb9678b1312be0a471675d26c4a9affc9286f30be0e42b7eb1f4ec0b801`.
+This does not establish macOS or real-provider behavior. Evidence is in
+`standalone-desktop-artifacts/oversize-draft-20261102/`.

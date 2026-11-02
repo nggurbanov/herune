@@ -1384,9 +1384,16 @@ fn validate(input: &SendInput) -> Result<(), String> {
         return Err("Unsupported approval mode".into());
     }
     for file in &input.attachments {
-        if !file.path.is_absolute() || !file.path.is_file() {
+        let metadata = file
+            .path
+            .is_absolute()
+            .then(|| std::fs::metadata(&file.path).ok())
+            .flatten()
+            .filter(|metadata| metadata.is_file())
+            .ok_or_else(|| format!("Could not read {}. Select the file again", file.name))?;
+        if metadata.len() > crate::gateway::MAX_CHAT_ATTACHMENT_BYTES as u64 {
             return Err(format!(
-                "Could not read {}. Select the file again",
+                "{} exceeds the 25 MiB attachment limit. Choose a smaller file",
                 file.name
             ));
         }

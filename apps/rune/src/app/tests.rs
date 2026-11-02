@@ -445,3 +445,81 @@ fn recovered_stream_clears_only_its_own_connection_error() {
         Some("send-id")
     );
 }
+
+#[test]
+fn oversized_attachment_preserves_the_composer_before_a_send_is_prepared() {
+    const CHILD: &str = "HERUNE_OVERSIZED_DRAFT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let root =
+            std::env::temp_dir().join(format!("herune-oversized-draft-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "app::tests::oversized_attachment_preserves_the_composer_before_a_send_is_prepared",
+                "--nocapture",
+            ])
+            .env(CHILD, &root)
+            .env("HOME", &root)
+            .env("XDG_STATE_HOME", root.join("state"))
+            .env("LOCALAPPDATA", root.join("state"))
+            .env("TMPDIR", &root)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert!(
+            output.status.success(),
+            "child failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let path = std::path::PathBuf::from(std::env::var_os(CHILD).unwrap()).join("large.pdf");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(crate::gateway::MAX_CHAT_ATTACHMENT_BYTES as u64 + 1)
+        .unwrap();
+    let mut s = Viewer::empty();
+    s.connection = Some(Connection::Url {
+        endpoint: "http://127.0.0.1:1".into(),
+        token: None,
+    });
+    s.conversation.init(std::sync::Arc::new(|| {}));
+    let scope = s.composer_scope();
+    let draft = s.composer.draft_mut(scope.clone());
+    draft.text.replace_text("Please read my detailed message");
+    draft.attachments.push(crate::composer::DraftAttachment {
+        path: path.clone(),
+        name: "large.pdf".into(),
+        preview: None,
+    });
+    assert!(s.can_send());
+    s.send_draft();
+    let draft = s.composer.draft(&scope).unwrap();
+    assert_eq!(
+        draft.text.text, "Please read my detailed message",
+        "send must not clear the text"
+    );
+    assert_eq!(draft.attachments.len(), 1);
+    assert_eq!(draft.attachments[0].path, path);
+    assert!(
+        s.compose_error
+            .as_deref()
+            .is_some_and(|e| e.contains("25 MiB")),
+        "unexpected error: {:?}",
+        s.compose_error
+    );
+    assert!(
+        !crate::client::state_dir()
+            .unwrap()
+            .join("submissions")
+            .exists(),
+        "a rejected send must not create a journal"
+    );
+    assert!(s.composer.remove_attachment(&scope, 0));
+    assert_eq!(
+        s.composer.draft(&scope).unwrap().text.text,
+        "Please read my detailed message"
+    );
+    assert!(s.can_send());
+}
