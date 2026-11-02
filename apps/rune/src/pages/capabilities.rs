@@ -1003,6 +1003,19 @@ impl Capabilities {
             self.message = Some("Provide a URL or a command.".into());
             return vec![];
         }
+        // The create endpoint adds one server under the backend's config lock.
+        // Keep the whole-map editor for fields that create cannot represent.
+        if matches!(self.selection, Some(Selection::AddMcp))
+            && headers.is_empty()
+            && (self.mcp_url.text.trim().is_empty() || (args.is_empty() && env.is_empty()))
+        {
+            let body = if self.mcp_url.text.trim().is_empty() {
+                json!({"name":name,"command":self.mcp_command.text.trim(),"args":args,"env":env})
+            } else {
+                json!({"name":name,"url":self.mcp_url.text.trim()})
+            };
+            return self.write(Action::SaveMcp, PageRequest::post("/api/mcp/servers", body));
+        }
         let mut config = self
             .mcp_config
             .get(&name)

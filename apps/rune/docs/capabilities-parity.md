@@ -160,3 +160,28 @@ capture of another desktop. Actual Wry/WebKitGTK feature probing found secure
 loopback/getUserMedia available and both standard/prefixed RTCPeerConnection
 absent on this Linux image. Native live voice uses its separate media engine;
 this plugin host makes no WebRTC capability claim from compile success alone.
+
+### Linux: agent-managed MCP tool in a real chat (2026-11-02)
+
+A bounded native check used Herune binary SHA-256
+`71c44ebf96bacf78fff3f91250be56eefd4cfa04144b8dde6638685b38824803`,
+with Herune source at `b3028958e79e4d1302a4d70c5882625baa9e8fe0` and an
+isolated pinned Hermes backend. Through Capabilities → Connectors, the check
+added a local stdio MCP server, verified the persisted configuration against
+Hermes, and used Test connection to discover its `fixture_echo` tool. A new
+chat then invoked that tool through Hermes `tool_call` and displayed the actual
+`MCP_PRIVATE_RESULT:hello` returned by the MCP server.
+
+The MCP server and model were private synthetic fixtures; the model supplied the
+tool-call decision, while the gateway and MCP protocol path were real. The test
+does not establish real-provider compatibility, remote MCP, reconnection,
+restart persistence, or macOS behavior. This agent-managed MCP flow is separate
+from the desktop plugin SDK and host. Compact evidence is retained locally at
+`standalone-desktop-artifacts/mcp-native-20261102/` beside this checkout.
+
+The native add form now uses Hermes' single-server create endpoint for normal
+stdio and URL servers, avoiding replacement of a previously loaded server map.
+The backend checks duplicate names under its config lock. Editing, the JSON
+editor, and additions with custom headers or other fields not represented by
+that endpoint still use the whole-map replacement API and can conflict with
+concurrent external configuration changes.

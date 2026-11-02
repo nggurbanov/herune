@@ -175,6 +175,42 @@ fn mcp_replacement_waits_for_a_confirmed_complete_map_and_retains_unedited_serve
 }
 
 #[test]
+fn adding_a_stdio_mcp_server_does_not_replace_other_clients_servers() {
+    let mut state = state();
+    state.apply(
+        "capabilities.mcp-config",
+        Ok(json!({"mcp_servers":{"old":{"command":"keep"}}})),
+    );
+    state.selection = Some(Selection::AddMcp);
+    state.mcp_name.replace_text("new-server");
+    state.mcp_command.replace_text("fixture-mcp");
+    state.mcp_args.replace_text(r#"["--serve"]"#);
+    state.mcp_env.replace_text(r#"{"KEY":"value"}"#);
+    let request = only(state.act(Action::SaveMcp));
+    assert!(matches!(request.method, crate::pages::PageMethod::Post));
+    assert_eq!(request.path, "/api/mcp/servers");
+    assert_eq!(
+        request.body,
+        json!({"name":"new-server","command":"fixture-mcp","args":["--serve"],"env":{"KEY":"value"}})
+    );
+}
+
+#[test]
+fn adding_a_url_mcp_server_uses_single_server_request() {
+    let mut state = state();
+    state.apply("capabilities.mcp-config", Ok(json!({"mcp_servers":{}})));
+    state.selection = Some(Selection::AddMcp);
+    state.mcp_name.replace_text("remote");
+    state.mcp_url.replace_text("https://example.invalid/mcp");
+    let request = only(state.act(Action::SaveMcp));
+    assert!(matches!(request.method, crate::pages::PageMethod::Post));
+    assert_eq!(
+        request.body,
+        json!({"name":"remote","url":"https://example.invalid/mcp"})
+    );
+}
+
+#[test]
 fn hosted_policy_uses_member_revision_and_keeps_the_member_disabled_tools() {
     let mut state = state();
     state.policy = json!({"effective":{"revision":"not-authoritative","disabled_tools":{"calendar":["org-tool"]}},"layers":[{"kind":"organization","body":{"mode":"deny","tools":{"calendar":["org-tool"]}}},{"kind":"member","revision":"member-revision","body":{"mode":"deny","tools":{"calendar":["member-tool"]}}}]});
