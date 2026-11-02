@@ -272,3 +272,26 @@ or establish image understanding. The raw harness check named `model request
 included image` matches that textual hint, not inline image bytes. No real model
 provider or macOS chooser was exercised. Evidence and the PNG hash check are at
 `standalone-desktop-artifacts/attachments-native-20261102/`.
+
+## Unsent drafts after restart
+
+On 2026-11-02 a native Linux test used the pinned Hermes gateway and a private
+local model fixture. Two stored conversations on one source and profile kept
+different unsent drafts after normal Quit and relaunch; switching between the
+conversations restored the correct text and sent neither draft. The executable
+was `b6194456129fa99a3641b047ff2f623bb0483d63aa29d6c7a5b1a1bc8684cbe9`,
+built at `18dd75ac72`; later plugin changes were not in that executable. The
+first attempt failed because the fixture computed the wrong storage filename,
+not because the draft was absent. Crash recovery, draft attachments, other
+sources/profiles and macOS remain untested. Evidence is retained at
+`standalone-desktop-artifacts/draft-restart-20261102/`.
+
+The same first run exposed each GUI-created session twice in the native
+sidebar: the `gui` source was included in both the recents and messaging
+queries. The client now excludes `gui` from messaging in both the batched and
+legacy requests. On the rebuilt Linux executable `9c938fc1999202003100a79f83d3956cfc228f7534d10360400b2e56c02b61db`,
+the same isolated gateway scenario showed each of the two sessions once before
+and after restart while preserving both drafts. A regression test also covers
+equal IDs in separate profiles and Telegram classification. The full Rust
+suite passed 958 tests with 15 ignored. The test fixture, red/green logs and
+limits are at `standalone-desktop-artifacts/sidebar-gui-native-20261102/`.

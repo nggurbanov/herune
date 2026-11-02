@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-const LOCAL_SOURCES: &str = "acp,cli,codex,desktop,gateway,kanban,local,oneshot,tui";
+const LOCAL_SOURCES: &str = "acp,cli,codex,desktop,gateway,gui,kanban,local,oneshot,tui";
 const MESSAGING_SOURCES: &str = "telegram,discord,slack,mattermost,matrix,signal,whatsapp,bluebubbles,photon,homeassistant,email,sms,webhook,api_server,weixin,wecom,qqbot,yuanbao,dingtalk,feishu";
 #[derive(Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
