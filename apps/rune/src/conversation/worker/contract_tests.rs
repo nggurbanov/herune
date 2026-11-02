@@ -650,8 +650,72 @@ fn bot_registry_retries_legacy_title_lookup_without_changing_profile() {
         session: None,
     };
     let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
     assert_eq!(worker.bot_registry().unwrap().as_deref(), Some("tip"));
     server.join().unwrap();
+}
+
+#[test]
+fn canonical_bot_chat_reuses_exact_profile_owner_without_creating_a_duplicate() {
+    let root = std::env::temp_dir().join(format!("herune-canonical-bot-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let lookup = request(&mut ws, "session.list");
+        assert_eq!(lookup["params"]["title"], "Bot Chat");
+        assert_eq!(lookup["params"]["include_hidden"], true);
+        assert!(lookup["params"].get("scope").is_none());
+        answer(
+            &mut ws,
+            &lookup,
+            json!({"sessions":[{"session_id":"stored","title":"Bot Chat"}]}),
+        );
+        let resume = request(&mut ws, "session.resume");
+        assert_eq!(resume["params"]["session_id"], "stored");
+        answer(&mut ws, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        let submit = request(&mut ws, "prompt.submit");
+        assert_eq!(submit["params"]["text"], "Hello bot");
+        answer(
+            &mut ws,
+            &submit,
+            json!({"ref":{"session_id":"live"},"admission_id":"admitted","status":"queued","execution_generation":0}),
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Hello bot".into(),
+            canonical_bot: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    assert!(worker.submit(entry, &journal).unwrap().is_none());
+    assert!(journal.load(&id).is_err());
+    server.join().unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

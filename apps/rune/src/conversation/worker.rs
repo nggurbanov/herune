@@ -607,15 +607,21 @@ impl Worker {
         Ok(None)
     }
     fn bot_registry(&mut self) -> Result<Option<String>, CallError> {
-        let result = self.transport()?.call(
-            "session.list",
-            json!({"scope":"stored","title":"Bot Chat","include_hidden":true,"limit":200}),
-        );
+        let canonical = self.transport()?.canonical;
+        // Canonical gateways resolve a title as an exact durable identity;
+        // combining it with a list scope is explicitly rejected.
+        let params = if canonical {
+            json!({"title":"Bot Chat","include_hidden":true,"limit":200})
+        } else {
+            json!({"scope":"stored","title":"Bot Chat","include_hidden":true,"limit":200})
+        };
+        let result = self.transport()?.call("session.list", params);
         let value = match result {
             // Older Hermes versions perform an exact, durable title lookup but
             // reject the newer scope parameter. Never retry an uncertain call.
             Err(error)
-                if !error.uncertain
+                if !canonical
+                    && !error.uncertain
                     && error.code == Some(4000)
                     && error
                         .message
