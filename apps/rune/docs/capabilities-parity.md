@@ -59,6 +59,10 @@ text. This is a bounded subset: arbitrary user folder grants, image data URLs,
 rename, trash and Windows file operations are not implemented. Desktop plugins
 remain trusted executable code; the per-plugin directory is not a sandbox
 against a malicious plugin impersonating another plugin through raw IPC.
+Text writes stage and sync a separate file before publishing it, so an I/O
+failure such as a full filesystem leaves a previously saved file intact. A
+Linux subprocess with an enforced file-size limit reproduced the old loss and
+passed after the change; this does not establish power-loss durability.
 The native manager and SDK adapter passed focused synthetic tests; the complete
 Linux Rust suite passed 1,017 tests with 15 ignored. Actual third-party plugins
 and macOS remain unverified for these operations.

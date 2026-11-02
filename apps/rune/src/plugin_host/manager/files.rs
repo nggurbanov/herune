@@ -12,6 +12,43 @@ mod tests {
     use std::os::unix::fs::symlink;
 
     #[test]
+    fn failed_write_keeps_the_previously_saved_text() {
+        let root =
+            std::env::temp_dir().join(format!("herune-plugin-full-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("plugin-storage")).unwrap();
+        let storage = root.join("plugin-storage/owner.json");
+        let request = json!({"pluginId":"test","folder":"data","op":"writeText","path":"note.txt","text":"previous data"});
+        assert_eq!(run(&storage, &request)["ok"], true);
+        let output = std::process::Command::new("sh")
+            .args(["-c", "ulimit -f 1; trap '' XFSZ; exec \"$1\" --exact plugin_host::manager::files::tests::limited_writer --ignored", "sh"])
+            .arg(std::env::current_exe().unwrap())
+            .env("HERUNE_PLUGIN_TEST_STORAGE", &storage)
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let result = run(
+            &storage,
+            &json!({"pluginId":"test","folder":"data","op":"readText","path":"note.txt"}),
+        );
+        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(result["text"], "previous data");
+    }
+
+    #[test]
+    #[ignore = "only run in a child with a strict file-size limit"]
+    fn limited_writer() {
+        let storage = std::env::var_os("HERUNE_PLUGIN_TEST_STORAGE").unwrap();
+        let result = run(
+            Path::new(&storage),
+            &json!({"pluginId":"test","folder":"data","op":"writeText","path":"note.txt","text":"x".repeat(16 * 1024)}),
+        );
+        assert_eq!(result["error"], "io-error");
+    }
+
+    #[test]
     fn private_text_survives_reopen_and_rejects_other_plugins_and_escapes() {
         let root =
             std::env::temp_dir().join(format!("herune-plugin-data-{}", uuid::Uuid::new_v4()));
@@ -24,6 +61,12 @@ mod tests {
         assert_eq!(
             run(&storage, &request("alpha", "readText", "notes.txt"))["text"],
             "hello Привет"
+        );
+        write["text"] = json!("updated");
+        assert_eq!(run(&storage, &write)["ok"], true);
+        assert_eq!(
+            run(&storage, &request("alpha", "readText", "notes.txt"))["text"],
+            "updated"
         );
         assert_eq!(
             run(&storage, &request("beta", "stat", "notes.txt"))["exists"],
@@ -75,7 +118,7 @@ pub(super) fn run(storage: &Path, request: &Value) -> Value {
 #[cfg(unix)]
 mod unix {
     use super::*;
-    use rustix::fs::{Mode, OFlags, mkdirat, open, openat};
+    use rustix::fs::{AtFlags, Mode, OFlags, linkat, mkdirat, open, openat, renameat, unlinkat};
     use sha2::{Digest, Sha256};
     use std::{
         fs::File,
@@ -209,23 +252,46 @@ mod unix {
                 return Err(("too-large", "Text exceeds the 4 MiB limit"));
             }
             let exclusive = request["exclusive"].as_bool().unwrap_or(false);
-            let flags = OFlags::WRONLY
-                | OFlags::CREATE
-                | OFlags::NOFOLLOW
-                | OFlags::NONBLOCK
-                | OFlags::CLOEXEC
-                | if exclusive {
-                    OFlags::EXCL
-                } else {
-                    OFlags::empty()
-                };
-            let fd = openat(&dir, name, flags, Mode::RUSR | Mode::WUSR).map_err(io_error)?;
+            let read_flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            match openat(&dir, name, read_flags, Mode::empty()) {
+                Ok(fd) => {
+                    if exclusive {
+                        return Err(("exists", "The file already exists"));
+                    }
+                    regular(&File::from(fd))?;
+                }
+                Err(rustix::io::Errno::NOENT) => {}
+                Err(error) => return Err(io_error(error)),
+            }
+            // Publish only a complete file. The old version survives disk-full,
+            // write and sync failures, and the directory handle fences the path.
+            let temporary = format!(".herune-write-{}", uuid::Uuid::new_v4());
+            let flags =
+                OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            let fd = openat(&dir, temporary.as_str(), flags, Mode::RUSR | Mode::WUSR)
+                .map_err(io_error)?;
             let mut file = File::from(fd);
-            regular(&file)?;
-            file.set_len(0)
-                .and_then(|_| file.write_all(text.as_bytes()))
-                .map_err(|_| ("io-error", "The file could not be written"))?;
-            let meta = regular(&file)?;
+            let written: Result<std::fs::Metadata> = (|| {
+                file.write_all(text.as_bytes())
+                    .and_then(|_| file.sync_all())
+                    .map_err(|_| ("io-error", "The file could not be written"))?;
+                let meta = regular(&file)?;
+                if exclusive {
+                    linkat(&dir, temporary.as_str(), &dir, name, AtFlags::empty())
+                        .map_err(io_error)?;
+                } else {
+                    renameat(&dir, temporary.as_str(), &dir, name).map_err(io_error)?;
+                }
+                Ok(meta)
+            })();
+            let cleanup = unlinkat(&dir, temporary.as_str(), AtFlags::empty());
+            let meta = written?;
+            if exclusive && cleanup.is_err() {
+                return Err((
+                    "io-error",
+                    "The file was created but temporary cleanup failed",
+                ));
+            }
             return Ok(json!({"ok":true,"path":path,"size":meta.len(),"mtimeMs":modified(&meta)}));
         }
         let fd = match openat(
