@@ -200,3 +200,16 @@ This tests an idle conversation across a gateway restart, not interruption durin
 an active generation, a real model provider, or macOS. The pinned legacy
 gateway's profile-unsafe sidebar live-status incompatibility remains open; see
 `capabilities-mac-handoff.md`.
+
+On 2026-11-02 the current `8edb25edd8` source was also built and exercised in a
+Linux native window against the pinned Hermes gateway and a private local model
+stub. The gateway was stopped while the first response was visibly streaming.
+After restart the same conversation retained its partial response, left the
+running state, and completed a second user turn. The first streaming request
+was not resubmitted to the model; both user messages appeared once. The gateway
+process identities exited and its private port closed. The acceptance covers one
+profile and one chat; it does not establish cross-profile recovery, real model
+provider behavior, or macOS acceptance. A previous fixture run held an auxiliary
+model request instead of the main stream and is not used as proof. Compact
+native evidence is retained locally at
+`standalone-desktop-artifacts/reconnect-native-20261102/`.
