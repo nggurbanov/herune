@@ -571,7 +571,10 @@ impl PluginHosts {
         if let Some(running) = &mut self.running {
             running.process.close();
             for event in running.process.poll().into_iter().flatten() {
-                if event["type"] == "plugin-storage-patch" {
+                if matches!(
+                    event["type"].as_str(),
+                    Some("plugin-storage-patch" | "plugin-decision-patch")
+                ) {
                     if let Err(error) = storage::queue(&mut running.storage, &event) {
                         self.error = Some(error);
                     }
@@ -983,7 +986,7 @@ impl PluginHosts {
                         self.reply(&id, Err("This native host operation is unavailable".into()));
                     }
                 }
-                "plugin-storage-patch" => {
+                "plugin-storage-patch" | "plugin-decision-patch" => {
                     if let Err(error) =
                         storage::queue(&mut self.running.as_mut().unwrap().storage, &value)
                     {
@@ -1482,6 +1485,9 @@ mod tests {
             fixture.lock().unwrap().events.push(Ok(
                 json!({"type":"plugin-storage-patch","key":key,"value":value}),
             ));
+            fixture.lock().unwrap().events.push(Ok(
+                json!({"type":"plugin-decision-patch","pluginId":value,"enabled":false}),
+            ));
             windows.push(host);
         }
         for mut host in windows {
@@ -1489,9 +1495,14 @@ mod tests {
             assert!(host.error.is_none());
         }
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["hermes.plugin.a.setting"], "one");
+        assert_eq!(saved["hermes.plugin.b.setting"], "two");
         assert_eq!(
-            saved,
-            json!({"hermes.plugin.a.setting":"one","hermes.plugin.b.setting":"two"})
+            serde_json::from_str::<Value>(
+                saved["hermes.desktop.pluginDecisions.v2"].as_str().unwrap()
+            )
+            .unwrap(),
+            json!({"one":false,"two":false})
         );
         std::fs::remove_dir_all(dir).unwrap();
     }

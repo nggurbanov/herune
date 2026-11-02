@@ -4,6 +4,10 @@ const allowed = (key: string) => key.startsWith('hermes.plugin.') || key === 'he
 export function createStorage(bridge: NativeBridge, storage: Storage) {
   return {
     readKey(key: string) { if (!allowed(key)) throw new Error('Invalid plugin storage key'); return storage.getItem(key) },
+    writeDecision(pluginId: string, enabled: boolean, decisions: Record<string, boolean>) {
+      storage.setItem('hermes.desktop.pluginDecisions.v2', JSON.stringify(decisions))
+      bridge.emit({ type: 'plugin-decision-patch', pluginId, enabled })
+    },
     writeKey(key: string, value: string | null) {
       if (!allowed(key)) throw new Error('Invalid plugin storage key')
       if (value === null) storage.removeItem(key); else storage.setItem(key, value)

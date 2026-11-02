@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "source_head": "921eaf34599697d519ee509c62a474943672abde",
+  "source_head": "3c9cf5a79d1875a5c362464c86a7286d49849f99",
   "build_command": "node apps/rune/scripts/build-plugin-host.mjs",
   "node": "v26.13.0",
   "source_inputs": {
@@ -181,7 +181,7 @@
     "packages/native-plugin-host/src/i18n/field-copy.ts": "55e84fc8c967874d41070b7a4b29c8af648035061dee60f7ddbc716a0738251d",
     "packages/native-plugin-host/src/i18n/service.ts": "d1c65bf366ddbe8808f9f1b8f88ff4d280129589d71f25c73f31c7a1aa65e8ee",
     "packages/native-plugin-host/src/index.ts": "5f989119027178c78d7fd0f60d7a9a4f013b63e05a43cd82ad69cf2d727e9356",
-    "packages/native-plugin-host/src/inventory.ts": "0aaf6629109b40bb65cfb21e4994cba1c9e9c6acee6b6f1940c16f9bec5a245c",
+    "packages/native-plugin-host/src/inventory.ts": "5da7b7fdc8d27ee31e48e5e0b97ca04349bb41c4317fd33326cca9b77ba81650",
     "packages/native-plugin-host/src/notifications.ts": "37df56cbdc641cd697ebf395e22be5eb1f760ca4d41208443d1beb6000d137aa",
     "packages/native-plugin-host/src/open-target.ts": "f7f7024df4851fd1504b58c5bb0e6e7fae08b182ba08f084cc7cf57cbe84c796",
     "packages/native-plugin-host/src/pane-visibility.tsx": "9353229b01301f4693197940f35b0597ec84f671a9b8d9fb47859d31c008c45a",
@@ -190,7 +190,7 @@
     "packages/native-plugin-host/src/services.ts": "cc04df5c319e5dc391bb582e8b675f8357ef02b4d2c328e01845515a53afbd5a",
     "packages/native-plugin-host/src/session-status.tsx": "a6d8fe4c485b8ca29ba8f0906c06d30417a39e2f964198f9fac1725845a6b708",
     "packages/native-plugin-host/src/socket.ts": "888b9fb2d6e0b7ed8fce15109d6d29e5012f5614738857ed27e5d6fe0b97e57f",
-    "packages/native-plugin-host/src/storage.ts": "9629fa415df86d61c6f5497f72ca3c7fdc535920508a8bb209eb288ac87d6e7b",
+    "packages/native-plugin-host/src/storage.ts": "324b78a3171b251b16a0e86538a3a3197b7dae5b4ec42b9778cc7019186e385a",
     "packages/native-plugin-host/src/styles.css": "27fb5cb36f7b3975aa81ed4aeedbfd45b83d53accba40f58354725a619c37790",
     "packages/plugin-sdk/package.json": "5db903b525703ca954c7752d58ecbd79a1585688d3299aa1a78ea7691a2cbdeb",
     "packages/plugin-sdk/src/chrome-contributions.ts": "f8cbf9a03b55445050884e2d35db067441f6ec929f4b9247127077fbefd19d32",
@@ -2271,8 +2271,8 @@
   ],
   "assets": {
     "host.js": {
-      "bytes": 664257,
-      "sha256": "9344d92ef5a661e778468dc585958f6b2051dfda89131b27a56c930e49e4b693"
+      "bytes": 664433,
+      "sha256": "ebfb0ee3a9392d9ca88201b5bf46a185584c6fda2d28cff47778b261ffecbe24"
     },
     "chunk-D32TOXHM-CrYSND-0.js": {
       "bytes": 654485,
@@ -2313,8 +2313,8 @@
   },
   "archive": {
     "file": "assets.json.gz",
-    "bytes": 2059355,
-    "sha256": "45b1ca6b1c340ee35c51c8e3e547e70b9a07123c0119266afc8300fdcec4ffe4"
+    "bytes": 2059403,
+    "sha256": "279a5d42ee5d92ff9ae1e8f0b22ceaec43643d38e6a8ac2445fd66827fbd443a"
   },
   "notices": {
     "file": "THIRD_PARTY_LICENSES.txt",

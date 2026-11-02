@@ -28,3 +28,27 @@ it('does not report an asynchronous registration as loaded before it succeeds', 
   reject(new Error('failed')); await expect(load).rejects.toThrow('failed'); expect(inventory.records.get().async.status).toBe('error'); expect(services.registry.getArea('panes')).toHaveLength(0)
   inventory.dispose();uninstall();bridge.close()
 })
+it('keeps decisions for different plugins changed in separate windows', async () => {
+  const frames: any[] = []
+  const memory = () => {
+    const data = new Map<string, string>()
+    return {getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value) }, removeItem: (key: string) => { data.delete(key) }} as unknown as Storage
+  }
+  const fakeRuntime = () => ({
+    load: async (id: string) => ({plugin:{id, register() {}}, activate() {}, deactivate() {}}),
+    dispose() {},
+  })
+  const first = createInventory(fakeRuntime() as any, createStorage(new NativeBridge({postMessage: s => frames.push(JSON.parse(s))}), memory()))
+  const second = createInventory(fakeRuntime() as any, createStorage(new NativeBridge({postMessage: s => frames.push(JSON.parse(s))}), memory()))
+  await first.load('a','a','disk',undefined,false)
+  await second.load('b','b','disk',undefined,false)
+  await first.setEnabled('a',false)
+  await second.setEnabled('b',false)
+  let durable: Record<string, boolean> = {}
+  for (const frame of frames) {
+    if (frame.type === 'plugin-decision-patch') durable[frame.pluginId] = frame.enabled
+    else if (frame.key === 'hermes.desktop.pluginDecisions.v2') durable = JSON.parse(frame.value)
+  }
+  expect(durable).toEqual({a:false,b:false})
+  first.dispose(); second.dispose()
+})

@@ -3,6 +3,9 @@ use serde_json::{Map, Value};
 use std::{collections::BTreeMap, path::Path};
 
 const LIMIT: usize = 5 * 1024 * 1024;
+const DECISIONS: &str = "hermes.desktop.pluginDecisions.v2";
+const LEGACY: &str = "hermes.desktop.disabledPlugins.v1";
+const DECISION_PREFIX: &str = "\0decision:";
 
 fn allowed(key: &str) -> bool {
     key.len() <= 16 * 1024
@@ -17,18 +20,30 @@ pub(super) fn queue(
     pending: &mut BTreeMap<String, Option<String>>,
     event: &Value,
 ) -> Result<(), String> {
-    let key = event["key"]
-        .as_str()
-        .filter(|key| allowed(key))
-        .ok_or("Invalid plugin storage key")?;
-    let value = match event.get("value") {
-        Some(Value::Null) => None,
-        Some(Value::String(value)) if value.len() <= LIMIT => Some(value.clone()),
-        _ => return Err("Invalid plugin storage value".into()),
+    let (key, value) = if event["type"] == "plugin-decision-patch" {
+        let id = event["pluginId"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 4096 && !id.chars().any(char::is_control))
+            .ok_or("Invalid plugin decision identity")?;
+        let enabled = event["enabled"]
+            .as_bool()
+            .ok_or("Invalid plugin decision")?;
+        (format!("{DECISION_PREFIX}{id}"), Some(enabled.to_string()))
+    } else {
+        let key = event["key"]
+            .as_str()
+            .filter(|key| allowed(key))
+            .ok_or("Invalid plugin storage key")?;
+        let value = match event.get("value") {
+            Some(Value::Null) => None,
+            Some(Value::String(value)) if value.len() <= LIMIT => Some(value.clone()),
+            _ => return Err("Invalid plugin storage value".into()),
+        };
+        (key.to_owned(), value)
     };
     let total: usize = pending
         .iter()
-        .filter(|(other, _)| other.as_str() != key)
+        .filter(|(other, _)| other.as_str() != key.as_str())
         .map(|(key, value)| key.len() + value.as_ref().map_or(0, String::len))
         .sum();
     if total
@@ -38,7 +53,7 @@ pub(super) fn queue(
     {
         return Err("Pending plugin storage changes exceed the size limit".into());
     }
-    pending.insert(key.to_owned(), value);
+    pending.insert(key, value);
     Ok(())
 }
 
@@ -56,7 +71,10 @@ pub(super) fn apply(path: &Path, pending: &BTreeMap<String, Option<String>>) -> 
         if !super::valid_storage(&Value::Object(values.clone())) {
             return Err("Saved plugin storage is invalid; it was preserved".into());
         }
-        for (key, value) in pending {
+        for (key, value) in pending
+            .iter()
+            .filter(|(key, _)| !key.starts_with(DECISION_PREFIX))
+        {
             if !allowed(key) {
                 return Err("Invalid plugin storage key".into());
             }
@@ -65,6 +83,52 @@ pub(super) fn apply(path: &Path, pending: &BTreeMap<String, Option<String>>) -> 
             } else {
                 values.remove(key);
             }
+        }
+        if pending.keys().any(|key| key.starts_with(DECISION_PREFIX)) {
+            let mut decisions: Map<String, Value> = if let Some(raw) = values
+                .get(DECISIONS)
+                .and_then(Value::as_str)
+                .filter(|raw| !raw.is_empty())
+            {
+                let parsed: Map<String, Value> = serde_json::from_str(raw)
+                    .map_err(|_| "Saved plugin decisions are invalid; they were preserved")?;
+                if parsed.values().any(|value| !value.is_boolean()) {
+                    return Err("Saved plugin decisions are invalid; they were preserved".into());
+                }
+                parsed
+            } else if let Some(raw) = values
+                .get(LEGACY)
+                .and_then(Value::as_str)
+                .filter(|raw| !raw.is_empty())
+            {
+                let disabled: Vec<String> = serde_json::from_str(raw)
+                    .map_err(|_| "Saved plugin decisions are invalid; they were preserved")?;
+                disabled
+                    .into_iter()
+                    .map(|id| (id, Value::Bool(false)))
+                    .collect()
+            } else {
+                Map::new()
+            };
+            for (key, value) in pending
+                .iter()
+                .filter(|(key, _)| key.starts_with(DECISION_PREFIX))
+            {
+                let id = key.strip_prefix(DECISION_PREFIX).unwrap();
+                let enabled = match value.as_deref() {
+                    Some("true") => true,
+                    Some("false") => false,
+                    _ => return Err("Invalid plugin decision".into()),
+                };
+                decisions.insert(id.into(), Value::Bool(enabled));
+            }
+            values.insert(
+                DECISIONS.into(),
+                Value::String(
+                    serde_json::to_string(&decisions)
+                        .map_err(|_| "Plugin decisions could not be encoded")?,
+                ),
+            );
         }
         let value = Value::Object(values);
         if !super::valid_storage(&value) {
@@ -125,6 +189,75 @@ mod tests {
             saved,
             json!({"hermes.plugin.first.setting":"one","hermes.plugin.second.setting":"two"})
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn decisions_from_stale_windows_merge_and_preserve_legacy_disabled_plugins() {
+        let dir =
+            std::env::temp_dir().join(format!("herune-plugin-decisions-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("storage.json");
+        let mut initial = BTreeMap::new();
+        queue(&mut initial, &json!({"key":LEGACY,"value":"[\"old\"]"})).unwrap();
+        queue(&mut initial, &json!({"key":DECISIONS,"value":""})).unwrap();
+        apply(&path, &initial).unwrap();
+        let barrier = Arc::new(Barrier::new(3));
+        let mut threads = Vec::new();
+        for (id, enabled) in [("a", false), ("b", true)] {
+            let barrier = barrier.clone();
+            let path = path.clone();
+            threads.push(std::thread::spawn(move || {
+                let mut pending = BTreeMap::new();
+                queue(
+                    &mut pending,
+                    &json!({"type":"plugin-decision-patch","pluginId":id,"enabled":enabled}),
+                )
+                .unwrap();
+                barrier.wait();
+                apply(&path, &pending).unwrap();
+            }));
+        }
+        barrier.wait();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let decisions: Value = serde_json::from_str(saved[DECISIONS].as_str().unwrap()).unwrap();
+        assert_eq!(decisions, json!({"old":false,"a":false,"b":true}));
+        assert_eq!(saved[LEGACY], "[\"old\"]");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_decisions_are_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!(
+            "herune-plugin-bad-decisions-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let path = dir.join("storage.json");
+        let mut initial = BTreeMap::new();
+        queue(
+            &mut initial,
+            &json!({"key":DECISIONS,"value":"{\"a\":123}"}),
+        )
+        .unwrap();
+        apply(&path, &initial).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut next = BTreeMap::new();
+        assert!(
+            queue(
+                &mut next,
+                &json!({"type":"plugin-decision-patch","pluginId":"","enabled":true})
+            )
+            .is_err()
+        );
+        queue(
+            &mut next,
+            &json!({"type":"plugin-decision-patch","pluginId":"b","enabled":false}),
+        )
+        .unwrap();
+        assert!(apply(&path, &next).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

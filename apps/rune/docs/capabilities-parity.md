@@ -208,6 +208,26 @@ SDK tests reproduced the stale snapshot overwriting a newer key before the
 change. Native manager and concurrent-file tests cover disjoint writes,
 deletion and corrupt input. An isolated Linux Wry window exercised the actual
 SDK bridge with the new storage event. The existing CSS is carried forward
-byte-for-byte. This is not live synchronization between already-open windows:
-concurrent writes to the same key still resolve by save order, including the
-shared plugin-decision object. macOS behavior was not tested here.
+byte-for-byte. At that checkpoint, concurrent writes to the shared
+plugin-decision object could still conflict; the follow-up below addresses
+individual plugin decisions. macOS behavior was not tested here.
+
+
+### Plugin enable decisions across windows (2026-11-02)
+
+The host now sends and merges enable/disable decisions by plugin ID under the
+same native storage lock. Changes to different plugins survive independent
+windows closing in either order, while existing v2 choices and the legacy
+disabled list are retained. Invalid saved decisions are preserved with an
+error rather than overwritten. This does not live-sync open windows; competing
+changes to the same plugin still resolve by save order.
+
+A JS inventory regression reproduced the lost decision and passed after the
+change. Native tests exercised concurrent decisions, legacy migration, corrupt
+data and window-close delivery. Typechecking, SDK/Bots/host suites and the
+1015-test Linux Rust run passed (15 ignored); the existing stylesheet was
+carried forward unchanged. These are local synthetic-service checks, not
+macOS or real third-party plugin acceptance.
+An isolated Linux Wry check also clicked Disable on a synthetic SDK plugin and
+observed a single native decision patch with its ID and `false` value; this
+checked the actual host UI-to-bridge path, not a real third-party plugin.
