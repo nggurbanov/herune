@@ -616,3 +616,23 @@ prompt. The tested binary was `ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e
 built before the separate retained-running status change. Evidence:
 `standalone-desktop-artifacts/sidebar-title-native-20261102/result.json`.
 This checks one profile and does not establish macOS or project-overview behavior.
+
+### Clipboard image staging (2026-11-02, integration pending)
+
+`client::clipboard_image` prepares a pasted PNG in private client state using a
+unique name and the existing atomic private writer. It rejects images above the
+client's 25 MiB attachment ceiling before writing. The draft keeps a normal file
+path, so the staged file must remain available while the draft or a retained send
+can still refer to it. Tests check byte preservation, distinct names and Unix
+permissions. The standard Rust suite passed 1,034 tests with 16 ignored; its
+pretest regenerated host assets, which were restored after the run. The two
+focused staging tests passed separately against the original assets. This helper
+is not yet connected to a composer paste hook.
+
+The view integration must capture the editor and `DraftScope` at paste time,
+validate ownership again after any background write, attach only to that draft,
+and preserve normal text paste. A write whose owner is retired before attachment
+must release only the just-created file. Once attached, cleanup requires proving
+that no persisted draft or send journal refers to the file, including across
+windows; no broad directory cleanup is implemented. The shared composer view is
+owned by the Mac lane and still requires coordination and native acceptance.
