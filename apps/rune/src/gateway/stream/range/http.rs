@@ -70,11 +70,21 @@ impl Http {
             }
         }
         self.runtime.block_on(async {
-            let send = self.client.request(method,self.url.clone()).headers(headers).send();
-            let mut response = tokio::select! {
-                biased;
-                _ = cancel.wait() => return Err("External media transfer cancelled".into()),
-                result = send => result.map_err(|_| "External media transfer failed (network, TLS or timeout)")?,
+            // A pooled connection can close while the decoder is paused. GET and HEAD
+            // are safe to redial once here: no response or body has reached the caller.
+            let mut attempts = 0;
+            let mut response = loop {
+                let send = self.client.request(method.clone(),self.url.clone()).headers(headers.clone()).send();
+                let result = tokio::select! {
+                    biased;
+                    _ = cancel.wait() => return Err("External media transfer cancelled".into()),
+                    result = send => result,
+                };
+                match result {
+                    Ok(response) => break response,
+                    Err(_) if attempts == 0 => attempts += 1,
+                    Err(_) => return Err("External media transfer failed (network, TLS or timeout)".into()),
+                }
             };
             let header = |name:&str| response.headers().get(name).and_then(|value|value.to_str().ok()).map(str::to_owned);
             let mut metadata = Metadata {

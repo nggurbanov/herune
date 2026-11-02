@@ -185,6 +185,93 @@ fn external_sparse_ranges_keep_exact_url_and_never_inherit_gateway_or_cookie_cre
         }
     }
 }
+
+#[test]
+fn external_ranges_continue_after_a_keepalive_connection_closes_while_idle() {
+    use std::{sync::mpsc, time::Instant};
+    fn read_request(socket: &std::net::TcpStream) -> (String, HashMap<String, String>) {
+        let mut reader = BufReader::new(socket.try_clone().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        let mut headers = HashMap::new();
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            let (name, value) = line.split_once(':').unwrap();
+            headers.insert(name.to_ascii_lowercase(), value.trim().to_string());
+        }
+        (first, headers)
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (closed_tx, closed_rx) = mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        assert!(read_request(&socket).0.starts_with("HEAD "));
+        socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nETag: \"external\"\r\n\r\n",2*BLOCK).as_bytes()).unwrap();
+        let (_, headers) = read_request(&socket);
+        assert_eq!(
+            headers.get("range").map(String::as_str),
+            Some("bytes=0-262143")
+        );
+        socket.write_all(format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {BLOCK}\r\nContent-Range: bytes 0-{}/{}\r\nETag: \"external\"\r\n\r\n",BLOCK-1,2*BLOCK).as_bytes()).unwrap();
+        socket.write_all(&vec![7; BLOCK as usize]).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        drop(socket);
+        closed_tx.send(()).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(7);
+        loop {
+            match listener.accept() {
+                Ok((mut socket, _)) => {
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(3)))
+                        .unwrap();
+                    let (_, headers) = read_request(&socket);
+                    assert_eq!(
+                        headers.get("range").map(String::as_str),
+                        Some("bytes=262144-524287")
+                    );
+                    assert_eq!(
+                        headers.get("if-range").map(String::as_str),
+                        Some("\"external\"")
+                    );
+                    socket.write_all(format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {BLOCK}\r\nContent-Range: bytes {BLOCK}-{}/{}\r\nETag: \"external\"\r\nConnection: close\r\n\r\n",2*BLOCK-1,2*BLOCK).as_bytes()).unwrap();
+                    let _ = socket.write_all(&vec![9; BLOCK as usize]);
+                    return true;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        }
+    });
+    let mut source =
+        RangeSource::open_external(&format!("http://{address}/tone.wav"), Cancel::default())
+            .unwrap();
+    closed_rx.recv_timeout(Duration::from_secs(4)).unwrap();
+    source.seek(SeekFrom::Start(BLOCK)).unwrap();
+    let mut bytes = [0; 16];
+    let result = source.read_exact(&mut bytes);
+    drop(source);
+    let served_next = server.join().unwrap();
+    assert!(
+        result.is_ok(),
+        "range read after idle close failed: {result:?}"
+    );
+    assert!(served_next, "the next range never reached the server");
+    assert_eq!(bytes, [9; 16]);
+}
 #[test]
 fn external_unknown_validator_and_ignored_ranges_use_single_sequential_representation() {
     for behavior in [Behavior::NoValidator, Behavior::Ignored] {

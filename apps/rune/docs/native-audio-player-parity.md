@@ -346,3 +346,23 @@ worker regression with null output, including query and credential assertions.
 The native packet error remains unexplained; this result does not establish
 native playback acceptance. The test ELF is volatile RAM output, separate from
 the historical frozen checkpoint.
+
+### External ranged audio after idle keep-alive closure (2026-11-02)
+
+A Linux native reproduction isolated an external WAV failure to the next
+request after the server closed an idle HTTP keep-alive connection. The exact
+underlying reqwest error was not captured. The client now retries a failed HEAD
+or GET send once, before receiving a response; it does not retry a partially
+read body, and normal range, validator, cancellation and credential checks stay
+in force. The new range regression failed before the fix and passed afterward.
+The external range suite passed 5 tests, the worker decode regression passed,
+and the common suite passed 961 tests with 15 ignored.
+
+On Linux binary SHA-256
+`f552ca4694eac693e1cdc56cdc30141fc49c7f4593783770384a8e15512bf5f6`,
+Light and Dark native runs passed against an independent loopback server that
+closed its idle connection. Both exercised private app-PID PCM playback, pause,
+five-second seek and volume. Wire records show a new connection for the next
+validated range, preserving the query without gateway credentials. This is a
+synthetic WAV/server test, not proof for every server, codec or OS. Evidence:
+`standalone-desktop-artifacts/external-audio-keepalive-20261102/`.
