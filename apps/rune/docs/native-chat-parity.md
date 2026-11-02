@@ -607,3 +607,12 @@ name and ID does not inherit that state and that a stale connection epoch clears
 it. The standard and exact-source Rust suites each passed 1,032 tests, with 16
 ignored. This does not add owner identity to an older gateway's process-wide live
 list or establish macOS acceptance.
+
+A further native Linux run tested title-only search against the same pinned
+Hermes gateway. A conversation titled `Mercury Quarterly Planning` was older
+than 65 other conversations, and its title word was absent from the message.
+Typing `Mercury` found and opened that conversation without sending a model
+prompt. The tested binary was `ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`,
+built before the separate retained-running status change. Evidence:
+`standalone-desktop-artifacts/sidebar-title-native-20261102/result.json`.
+This checks one profile and does not establish macOS or project-overview behavior.
