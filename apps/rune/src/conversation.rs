@@ -793,6 +793,24 @@ impl Conversation {
         let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
         let (journal, entry) = journal.review(submission_id, expected_revision)?;
         entry.verify_owner(connection, scope)?;
+        if entry.legacy_image_paths.iter().any(Option::is_some) {
+            let key = self.key(scope);
+            if self.views.get(&key).is_some_and(|view| view.preparing) {
+                return Err("A send is already being prepared".into());
+            }
+            let worker = self.worker(connection.clone(), key.clone())?;
+            self.views.entry(key.clone()).or_default().preparing = true;
+            if worker
+                .send(worker::Command::Discard(entry, journal))
+                .is_err()
+            {
+                self.views.entry(key).or_default().preparing = false;
+                return Err(
+                    "Conversation worker is unavailable; the saved send was retained".into(),
+                );
+            }
+            return Ok(());
+        }
         journal.retire(&entry)?;
         if let Some(view) = self.views.get_mut(&self.key(scope)) {
             if view.uncertain.as_deref() == Some(submission_id) {
@@ -959,6 +977,7 @@ impl Conversation {
                 | worker::Reply::Snapshot { origin, .. }
                 | worker::Reply::Admitted { origin, .. }
                 | worker::Reply::AttachmentsReady { origin, .. }
+                | worker::Reply::Discarded { origin, .. }
                 | worker::Reply::InputRejected { origin, .. }
                 | worker::Reply::Event { origin, .. }
                 | worker::Reply::Failed { origin, .. }
@@ -1240,6 +1259,29 @@ impl Conversation {
                             });
                         }
                         updates.push(Update::Changed { scope });
+                    }
+                }
+                worker::Reply::Discarded { origin, id, result } => {
+                    let scope = self.key(&origin);
+                    let view = self.views.entry(scope.clone()).or_default();
+                    view.preparing = false;
+                    match result {
+                        Ok(()) => {
+                            if view.uncertain.as_deref() == Some(&id) {
+                                view.uncertain = None;
+                                view.error = None;
+                            }
+                            updates.push(Update::Changed { scope });
+                        }
+                        Err(error) => {
+                            view.uncertain = Some(id);
+                            view.error = Some(error.message.clone());
+                            updates.push(Update::Failed {
+                                scope,
+                                message: error.message,
+                                uncertain: error.uncertain,
+                            });
+                        }
                     }
                 }
                 worker::Reply::AttachmentsReady { origin, id } => {

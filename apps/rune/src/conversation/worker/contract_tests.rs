@@ -1460,7 +1460,7 @@ mod plugin_chat_tests;
 
 #[test]
 fn legacy_large_images_require_a_gateway_with_large_frame_support() {
-    for contract in [Some(8), None] {
+    for contract in [Some(8), Some(5), None] {
         let root =
             std::env::temp_dir().join(format!("herune-large-legacy-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
@@ -1495,15 +1495,42 @@ fn legacy_large_images_require_a_gateway_with_large_frame_support() {
                 );
                 return;
             }
-            let upload = request(&mut ws, "image.attach_bytes");
-            let encoded = upload["params"]["content_base64"].as_str().unwrap();
+            let upload = request(
+                &mut ws,
+                if contract == Some(8) {
+                    "file.attach"
+                } else {
+                    "image.attach_bytes"
+                },
+            );
+            let encoded = if contract == Some(8) {
+                upload["params"]["data_url"]
+                    .as_str()
+                    .unwrap()
+                    .split_once(',')
+                    .unwrap()
+                    .1
+            } else {
+                upload["params"]["content_base64"].as_str().unwrap()
+            };
             assert_eq!(
                 base64::engine::general_purpose::STANDARD
                     .decode(encoded)
                     .unwrap(),
                 image
             );
-            answer(&mut ws, &upload, json!({"attached":true}));
+            answer(
+                &mut ws,
+                &upload,
+                json!({"attached":true,"path":"/private/large.png"}),
+            );
+            if contract == Some(8) {
+                let detach = request(&mut ws, "image.detach");
+                answer(&mut ws, &detach, json!({"detached":false}));
+                let attach = request(&mut ws, "image.attach");
+                assert_eq!(attach["params"]["path"], "/private/large.png");
+                answer(&mut ws, &attach, json!({"attached":true}));
+            }
         });
         let scope = DraftScope {
             draft_origin: None,
@@ -1865,6 +1892,101 @@ fn retry_of_unpersisted_legacy_attachment_uses_only_confirmed_idle_runtime() {
 }
 
 #[test]
+fn first_send_in_existing_empty_lazy_session_uses_confirmed_idle_runtime() {
+    let root = std::env::temp_dir().join(format!("herune-lazy-retry-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        state.as_object_mut().unwrap().remove("running");
+        answer(&mut ws, &resume, state);
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"starting","message_count":0,"preview":""}]}),
+        );
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"idle","message_count":0}]}),
+        );
+        let upload = request(&mut ws, "file.attach");
+        answer(
+            &mut ws,
+            &upload,
+            json!({"attached":true,"ref_text":"@file:note.txt"}),
+        );
+        let prompt = request(&mut ws, "prompt.submit");
+        assert_eq!(
+            prompt["params"]["text"],
+            "@file:note.txt\n\nRetry this message"
+        );
+        answer(&mut ws, &prompt, json!({"status":"streaming"}));
+    });
+    let fresh = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Retry this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, replies) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    assert!(worker.submit(entry, &journal).unwrap().is_none());
+    assert!(
+        replies
+            .try_iter()
+            .any(|reply| matches!(reply, Reply::Admitted { id: sent, .. } if sent == id))
+    );
+    assert!(
+        journal.load(&id).is_err(),
+        "accepted send must retire the saved intent"
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn previously_attempted_legacy_send_still_reads_authoritative_history() {
     let root = std::env::temp_dir().join(format!("herune-lazy-attempted-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
@@ -2001,4 +2123,167 @@ fn fresh_legacy_retry_rejects_changed_stored_owner_before_upload() {
         "no second request may reach the foreign session"
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_image_retry_detaches_uncertain_attach_and_discard_cleans_queue() {
+    let root = std::env::temp_dir().join(format!("herune-image-retry-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let image = root.join("image.png");
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\nprivate fixture bytes").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut ws = tungstenite::accept(socket).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["info"]["desktop_contract"] = json!(8);
+        answer(&mut ws, &resume, state.clone());
+        let stage = request(&mut ws, "file.attach");
+        assert!(
+            stage["params"]["data_url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        answer(
+            &mut ws,
+            &stage,
+            json!({"attached":true,"path":"/private/staged.png"}),
+        );
+        let detach = request(&mut ws, "image.detach");
+        assert_eq!(detach["params"]["path"], "/private/staged.png");
+        answer(&mut ws, &detach, json!({"detached":false}));
+        let attach = request(&mut ws, "image.attach");
+        assert_eq!(attach["params"]["path"], "/private/staged.png");
+        drop(ws); // The agent queued the image, but its acknowledgement was lost.
+        let (socket, _) = listener.accept().unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut ws = tungstenite::accept(socket).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, state.clone());
+        let detach = request(&mut ws, "image.detach");
+        assert_eq!(detach["params"]["path"], "/private/staged.png");
+        answer(&mut ws, &detach, json!({"detached":true}));
+        let attach = request(&mut ws, "image.attach");
+        assert_eq!(attach["params"]["path"], "/private/staged.png");
+        answer(&mut ws, &attach, json!({"attached":true}));
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, state);
+        let detach = request(&mut ws, "image.detach");
+        assert_eq!(detach["params"]["path"], "/private/staged.png");
+        answer(&mut ws, &detach, json!({"detached":true}));
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Look at this".into(),
+            attachments: vec![AttachmentInput {
+                path: image,
+                name: "image.png".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.runtime = Some("live".into());
+    entry.stored = Some("stored".into());
+    entry.canonical = Some(false);
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    worker.transport.as_mut().unwrap().resume("stored").unwrap();
+    assert!(
+        worker
+            .prepare_files(&mut entry, &journal)
+            .unwrap_err()
+            .uncertain
+    );
+    let mut retained = journal.load(&id).unwrap();
+    assert_eq!(
+        retained.legacy_image_paths[0].as_deref(),
+        Some("/private/staged.png")
+    );
+    worker.transport = None;
+    worker.transport().unwrap().resume("stored").unwrap();
+    worker.prepare_files(&mut retained, &journal).unwrap();
+    worker.discard(&retained, &journal).unwrap();
+    assert!(journal.load(&id).is_err());
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn image_discard_retains_send_when_runtime_changed_or_cleanup_fails() {
+    for changed_runtime in [true, false] {
+        let root =
+            std::env::temp_dir().join(format!("herune-image-discard-{}", uuid::Uuid::new_v4()));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: None,
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            if changed_runtime {
+                state["session_id"] = json!("other-live");
+            }
+            answer(&mut ws, &resume, state);
+            if !changed_runtime {
+                let _detach = request(&mut ws, "image.detach");
+            }
+            // A dropped detach reply is not proof that the image was removed.
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "work".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: Some("stored".into()),
+        };
+        let mut entry = Prepared::new(&connection, &scope, SendInput::default()).unwrap();
+        entry.runtime = Some("live".into());
+        entry.stored = Some("stored".into());
+        entry.canonical = Some(false);
+        entry
+            .legacy_image_paths
+            .push(Some("/private/staged.png".into()));
+        let id = entry.submission_id.clone();
+        let journal = Journal::new(root.join("journal")).unwrap();
+        journal.save(&entry).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        assert!(worker.discard(&entry, &journal).is_err());
+        assert!(
+            journal.load(&id).is_ok(),
+            "failure must retain the original saved send"
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

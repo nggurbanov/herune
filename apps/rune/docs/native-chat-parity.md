@@ -408,3 +408,21 @@ Snapshots that explicitly identify another profile are refused; an omitted
 profile remains compatible with older gateways. Existing chats can still follow
 server-resolved compression continuations. Private socket and parser tests
 cover the owner refusal; they do not establish malicious-server or macOS behavior.
+
+### Legacy image retry after a lost acknowledgement (2026-11-02)
+
+With the pinned Hermes contract v8, image bytes are first staged as a file and
+its path is retained with the saved send. Before attaching on each attempt the
+same path is detached, so a lost image-attach acknowledgement does not queue a
+second copy. Discard also detaches known paths on the captured runtime before
+retiring the journal; an unconfirmed cleanup or changed runtime preserves it.
+A first send to a confirmed empty lazy session can proceed after discard. Older
+legacy contracts retain their original upload behavior and do not get this retry
+guarantee.
+
+An isolated native Linux run against pinned Hermes cut the first successful
+image-attach response. Before the fix the synthetic model received two image
+references; afterward it received one with the original file bytes. A separate
+native run discarded the send and then submitted text without the image.
+This is not a real-provider or macOS acceptance claim. Evidence:
+`standalone-desktop-artifacts/image-retry-native-20261102/`.

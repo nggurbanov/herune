@@ -15,6 +15,7 @@ pub(crate) enum Command {
     Workspace(super::workspace::Intent),
     Attach,
     Send(Prepared, Journal),
+    Discard(Prepared, Journal),
     Control(Control),
 }
 pub(crate) enum Control {
@@ -93,6 +94,11 @@ pub(crate) enum Reply {
         restored_replay: Option<ReplayBundle>,
         policy_stamp: Option<PolicyStamp>,
         policy_fields: PolicyFields,
+    },
+    Discarded {
+        origin: DraftScope,
+        id: String,
+        result: Result<(), CallError>,
     },
     AttachmentsReady {
         origin: DraftScope,
@@ -290,8 +296,8 @@ impl Worker {
         // A stored session is resumed by its durable id. Failure never creates
         // an unrelated conversation and never changes the GUI surface to CLI.
         let stored = entry.stored.clone().or(entry.session.clone());
-        let (snapshot, created) = if let Some(stored) = stored {
-            (self.transport()?.resume(&stored)?, false)
+        let (snapshot, created) = if let Some(ref stored) = stored {
+            (self.transport()?.resume(stored)?, false)
         } else if entry.input.canonical_bot {
             if let Some(winner) = self.bot_registry()? {
                 (self.transport()?.resume(&winner)?, false)
@@ -376,8 +382,7 @@ impl Worker {
         }
         let retrying_empty_legacy = !created
             && !canonical
-            && entry.session.is_none()
-            && entry.stored.as_deref() == Some(snapshot.stored.as_str())
+            && stored.as_deref() == Some(snapshot.stored.as_str())
             && !entry.attempted
             && !entry.legacy_attempted
             && entry.input.rewind.is_none()
@@ -938,6 +943,34 @@ impl Worker {
         });
         Ok(())
     }
+    fn discard(&mut self, entry: &Prepared, journal: &Journal) -> Result<(), CallError> {
+        journal.check_current(entry)?;
+        entry.verify_owner(&self.connection, &self.scope)?;
+        if entry.legacy_image_paths.iter().any(Option::is_some) {
+            let stored = entry
+                .stored
+                .as_deref()
+                .ok_or("The saved image has no session owner")?;
+            let snapshot = self.transport()?.resume(stored)?;
+            if Some(snapshot.runtime.as_str()) != entry.runtime.as_deref() {
+                return Err("The image belongs to a different session runtime; reconnect before discarding the saved send".into());
+            }
+            for path in entry.legacy_image_paths.iter().flatten() {
+                let result = self.transport()?.call(
+                    "image.detach",
+                    json!({"session_id":snapshot.runtime,"path":path}),
+                )?;
+                if !result.get("detached").is_some_and(Value::is_boolean) {
+                    return Err(
+                        "The gateway did not confirm image cleanup; the saved send was retained"
+                            .into(),
+                    );
+                }
+            }
+        }
+        journal.retire(entry)?;
+        Ok(())
+    }
     fn prepare_files(&mut self, entry: &mut Prepared, journal: &Journal) -> Result<(), CallError> {
         use std::io::Read;
         if entry.text.is_none() {
@@ -1011,6 +1044,47 @@ impl Worker {
                         .transport()?
                         .upload_image(format!("data:{mime};base64,{encoded}"), &file.name)?;
                     entry.images.push(image);
+                } else if supports_large_frames
+                    && self
+                        .transport
+                        .as_ref()
+                        .and_then(|transport| transport.snapshot.as_ref())
+                        .and_then(|snapshot| snapshot.info.get("desktop_contract"))
+                        .and_then(Value::as_u64)
+                        .is_some_and(|version| version >= 8)
+                {
+                    // Stage bytes as an ordinary file first: unlike image.attach_bytes,
+                    // losing its acknowledgement cannot leave a queued image behind.
+                    if entry.legacy_image_paths.len() <= index {
+                        entry.legacy_image_paths.resize(index + 1, None);
+                    }
+                    if entry.legacy_image_paths[index].is_none() {
+                        let ext = match mime {
+                            "image/png" => "png",
+                            "image/jpeg" => "jpg",
+                            "image/gif" => "gif",
+                            "image/webp" => "webp",
+                            _ => unreachable!(),
+                        };
+                        let name = format!("herune-{}-{index}.{ext}", entry.submission_id);
+                        let result = self.transport()?.call(
+                            "file.attach",
+                            json!({
+                                "session_id":runtime,"name":name,
+                                "data_url":format!("data:{mime};base64,{encoded}")
+                            }),
+                        )?;
+                        let path = result
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .filter(|path| {
+                                !path.is_empty()
+                                    && result.get("attached") == Some(&Value::Bool(true))
+                            })
+                            .ok_or("The gateway did not confirm the staged image path")?;
+                        entry.legacy_image_paths[index] = Some(path.to_owned());
+                        journal.save(entry)?;
+                    }
                 } else {
                     let result = self.transport()?.call(
                         "image.attach_bytes",
@@ -1039,6 +1113,22 @@ impl Worker {
             }
             entry.attached = index + 1;
             journal.save(entry)?;
+        }
+        // A known path can be detached idempotently even when a prior attach
+        // acknowledgement was lost. Restage all images after reconnecting.
+        for path in entry.legacy_image_paths.iter().flatten() {
+            let detached = self
+                .transport()?
+                .call("image.detach", json!({"session_id":runtime,"path":path}))?;
+            if !detached.get("detached").is_some_and(Value::is_boolean) {
+                return Err("The gateway did not confirm image cleanup".into());
+            }
+            let attached = self
+                .transport()?
+                .call("image.attach", json!({"session_id":runtime,"path":path}))?;
+            if attached.get("attached") != Some(&Value::Bool(true)) {
+                return Err("The gateway could not attach the staged image".into());
+            }
         }
         if entry.text.as_deref() == Some("") && !entry.input.attachments.is_empty() {
             entry.text = Some("What do you see in this image?".into());
@@ -1210,6 +1300,19 @@ pub(crate) fn spawn(
                         Ok(None) => {}
                         Err(error) => worker.failure(Some(id), error, false),
                     }
+                }
+                Ok(Command::Discard(entry, journal)) => {
+                    let id = entry.submission_id.clone();
+                    let result = worker.discard(&entry, &journal);
+                    if result.as_ref().err().is_some_and(|error| error.uncertain) {
+                        worker.transport = None;
+                    }
+                    drop(journal);
+                    worker.notify(Reply::Discarded {
+                        origin: worker.scope.clone(),
+                        id,
+                        result,
+                    });
                 }
                 Ok(Command::Control(Control::Respond {
                     prompt_id,
