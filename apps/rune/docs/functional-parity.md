@@ -52,8 +52,22 @@ native host already had partial implementations of embedded plugin views; the
 Electron renderer supported additional management and media workflows. Connector
 account and toolset provider/credential editing, embedded media, cross-window
 relay, file grants and preview execution remain unavailable in these native
-views. The native toolbar does not yet apply plugin workspace scope, and native
-socket reconnection and platform acceptance remain open. The SDK model catalog
+views. The native toolbar does not yet apply plugin workspace scope, and platform
+acceptance remains open. For an already connected plugin gateway, the host now
+requests a fresh owner-bound socket after a disconnect with bounded backoff;
+interrupted requests are not resent. The host also retries a failed initial
+connection, retaining the original owner and stopping when its pool or owner
+retires. Synthetic host tests cover initial failure, reconnection, failed redial
+and owner retirement. A Linux native WebView test loaded the bundled Bots pane
+after an initial synthetic gateway failure. Real backend and macOS recovery
+remain unverified. The 2026-11-02 Linux host, SDK and Bots suites passed, as did
+the 957-test Rust suite and a synthetic native WebView smoke. The Rust run used
+the freshly generated stylesheet; the final host archive retains the prior
+stylesheet byte-for-byte because a stale local dependency changed font embedding.
+The final owner-capture guard was added after that Rust run began; it was verified in
+the host tests and rebuilt native WebView bundle, not a new Rust run. The
+reconnect behavior itself was tested separately from the stylesheet.
+The SDK model catalog
 menu exports are not yet ported. These are parity gaps, not proof that the
 Electron workflows were preserved. Plugin-originated workspace changes use
 `setWorkspaceScopeAsync` and wait for an owner-verified native acknowledgement;
@@ -662,3 +676,16 @@ The Mermaid-enabled RuneKit gate additionally passed its selected unit test and
 106 integration tests. The current production app built in the same private
 RAM overlay without a UI launch; that volatile binary is not a durable release
 checkpoint. Vendor verification and a reverse/forward patch round trip passed.
+
+### Remote text encoding safety (2026-11-02)
+
+Before saving a remote preview containing U+FFFD, Herune now reads the original
+bytes and compares them with the UTF-8 bytes of the loaded text. It refuses the
+write and retains the edited draft if the file was decoded with replacement or
+has changed; a genuine U+FFFD in valid UTF-8 remains editable. Ordinary text
+keeps the existing read-before-save path. A private pinned Hermes backend
+confirmed that valid and invalid source bytes can produce the same preview.
+
+This is not an atomic compare-and-swap for remote writes: Hermes still writes
+separately after the read, so another writer can change the file between the
+check and the write. Local writes retain their existing snapshot check.

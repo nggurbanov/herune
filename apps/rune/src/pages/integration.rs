@@ -192,7 +192,7 @@ impl Viewer {
                     self.profile_intent,
                 ))
     }
-    fn page_owner_ready(&self) -> bool {
+    pub(crate) fn page_owner_ready(&self) -> bool {
         self.fixture
             || (self.page_connection_accepted()
                 && self.page_loaded_owner.as_ref()
@@ -732,3 +732,7 @@ mod readiness_tests {
         assert!(wire.calls().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "capabilities/mounted_tests.rs"]
+mod capabilities_mounted_tests;

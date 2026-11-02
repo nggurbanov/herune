@@ -55,12 +55,10 @@ fn private_roundtrip_keeps_the_complete_auth_and_profile_policy() {
             .unwrap();
         match policy.auth {
             WireAuth::Preserve => {
-                assert!(request.headers.is_empty());
-                assert!(
-                    request
-                        .url
-                        .query_pairs()
-                        .any(|(key, value)| key == "token" && value == "private-session-fixture")
+                assert!(!request.url.query_pairs().any(|(key, _)| key == "token"));
+                assert_eq!(
+                    request.headers["x-hermes-session-token"],
+                    "private-session-fixture"
                 );
             }
             WireAuth::LegacyToken => {

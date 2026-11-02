@@ -25,9 +25,11 @@ const IDS = {A: '11111111-1111-4111-8111-111111111111', B: '22222222-2222-4222-8
 const REVISIONS = {A: '33333333-3333-4333-8333-333333333333', B: '44444444-4444-4444-8444-444444444444'}
 const PLUGIN_ROOT = '/private-fixture/desktop-plugins'
 const PLUGIN_FOLDER = `${PLUGIN_ROOT}/proof`
+const fileProof = args.includes('--plugin-files')
 const PLUGIN_SOURCE = `import * as React from 'react'; import {Button,host} from '@hermes/plugin-sdk';
-function Proof(){const [n,setN]=React.useState(0);return React.createElement('section',null,React.createElement('h1',null,'Installed SDK proof'),React.createElement(Button,{onClick:()=>{setN(n+1);host.request('native.proof',{profile:'default',click:n+1});}},'Proof clicks '+n));}
-export default {id:'installed-sdk-proof',name:'Installed SDK proof',register(ctx){ctx.register({id:'proof',area:'primarySidebar',title:'Proof',render:()=>React.createElement(Proof)});}};`
+let files;
+function Proof(){const [n,setN]=React.useState(0);return React.createElement('section',null,React.createElement('h1',null,'Installed SDK proof'),React.createElement(Button,{onClick:async()=>{setN(n+1);${fileProof ? `const before=await files.stat('data','note.txt'); if(!before.ok)throw Error('stat failed'); if(!before.exists){const wrote=await files.writeText('data','note.txt','saved by SDK');if(!wrote.ok)throw Error('write failed');}const read=await files.readText('data','note.txt');const list=await files.list('data');if(!read.ok||!list.ok)throw Error('read or list failed');await host.request('native.proof',{profile:'default',click:n+1,file:{before:before.exists,text:read.text,entries:list.entries.map(e=>e.name)}});` : `host.request('native.proof',{profile:'default',click:n+1});`}}},'Proof clicks '+n));}
+export default {id:'installed-sdk-proof',name:'Installed SDK proof',register(ctx){files=ctx.files;ctx.register({id:'proof',area:'primarySidebar',title:'Proof',render:()=>React.createElement(Proof)});}};`
 const TOKEN = 'private-native-fixture-token'
 const ROOT = 'shared-root', TIP = 'shared-tip', PROFILE = 'default', RENAME = 'B renamed from native fleet'
 const catalog = {provider: 'fixture', model: 'fixture-model', providers: [{slug: 'fixture', name: 'Private fixture', authenticated: true, models: ['fixture-model']}]}
@@ -117,16 +119,23 @@ class Gateway {
       case 'client.capabilities': result = {}; break
       case 'ping': result = {}; break
       case 'plugins.manage': assert.equal(p.action, 'list'); result = {plugins: []}; break
+      case 'projects.tree': result = {projects: []}; break
+      case 'groups.capabilities': result = {driver: true, persistent_process: true, seatable_profiles: this.names()}; break
+      case 'groups.list': result = {rooms: [], next_offset: null}; break
+      case 'bot_relay.roster.sync': assert.deepEqual(p.agents, []); result = {ok: true}; break
+      case 'bot_relay.outbox.drain': result = {envelopes: []}; break
+      case 'profiles.describe': assert.ok(this.names().includes(p.name)); result = {soul: '## Messaging other agents\nPrivate fixture'}; break
       case 'runtime.describe': assert.deepEqual(p, {}); result = {profile_id: `/private-fixture/${this.name}/root`, instance_id: `private-${this.name}`, authority_epoch: 7, capabilities: [], session_create: {sources: ['desktop', 'gui'], parameters: []}}; break
       case 'session.create': { const session = this.session(profile); session.subscribers.add(socket); result = this.snapshot(session); break }
-      case 'profiles.list': result = {profiles: this.profiles(), active: 'dixie'}; break
+      case 'profiles.list': result = {profiles: this.profiles(), active: 'dixie', bot_mode_protocol: true}; break
       case 'session.list': result = {profile, sessions: p.scope === 'live' ? [...this.sessions.values()].filter(s => s.profile === profile && s.running).map(s => ({id: s.runtime, profile: s.profile, status: 'working', running: true})) : this.rows(profile)}; break
       case 'session.resume': { const session = this.session(profile, p.session_id); session.subscribers.add(socket); result = this.snapshot(session); break }
       case 'model.options': result = catalog; break
       case 'config.get': result = {value: p.key === 'approvals.mode' ? 'smart' : null}; break
       case 'config.set': assert.equal(p.key, 'approvals.mode'); assert.equal(p.value, 'smart'); result = {key: p.key, value: p.value}; break
       case 'setup.runtime_check': result = {ok: true, ready: true}; break
-      case 'profiles.get_asset': result = {data_url: null}; break
+      case 'profiles.get_asset': result = {data: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/a6QAAAAASUVORK5CYII='}; break
+      case 'profiles.set_asset': assert.ok(this.names().includes(p.name)); assert.equal(p.asset, 'avatar'); assert.ok(p.data.startsWith('data:image/png;base64,')); result = {ok: true}; break
       case 'process.list': result = {processes: []}; break
       case 'subagent.list': result = {subagents: []}; break
       case 'prompt.submit': {
@@ -163,7 +172,10 @@ class Gateway {
     assert.ok(profile === 'all' || this.names().includes(profile), `Unknown HTTP profile ${profile}`)
     let result
     const history = /^\/api\/sessions\/([^/]+)\/messages$/.exec(url.pathname)
-    {
+    if (req.method === 'POST' && url.pathname === '/api/desktop-plugins/reconcile') {
+      assert.equal(body, null)
+      result = {ok: true}
+    } else {
       assert.equal(req.method, 'GET', `Forbidden HTTP write ${req.method} ${url.pathname}`)
       if (history) { const session = this.session(profile, decodeURIComponent(history[1])); result = {profile, session_id: session.id, messages: session.rows} }
       else switch (url.pathname) {
@@ -175,7 +187,7 @@ class Gateway {
           assert.equal(query.path, `${PLUGIN_FOLDER}/plugin.js`); result = {path:query.path,text:PLUGIN_SOURCE,truncated:false}; break
         case '/api/skills': result = {skills: []}; break
         case '/api/skills/hub/official': result = {skills: []}; break
-        case '/api/profiles': result = {profiles: this.profiles(), active: 'dixie'}; break
+        case '/api/profiles': result = {profiles: this.profiles(), active: 'dixie', bot_mode_protocol: true}; break
         case '/api/profiles/sessions/sidebar': result = {recents: {sessions: this.rows(query.recents_profile ?? profile)}, messaging: {sessions: []}, cron: {sessions: []}}; break
         case '/api/profiles/sessions': result = {sessions: this.rows(profile)}; break
         case '/api/cron/jobs': result = {jobs: []}; break
@@ -476,7 +488,7 @@ function seededRegistry() { return {version: 1, rows: ['A'].map(source => ({id: 
 async function runCase(name, config, check) {
   if (only && only !== name) return
   for (const gateway of Object.values(gateways)) gateway.reset()
-  const directory = path.join(out, name), home = path.join(suiteHome, name), state = path.join(home, 'state', 'hermes-desktop-rune'), inspection = path.join(directory, 'inspection')
+  const directory = path.join(out, name), home = path.join(suiteHome, config.persistHome ?? name), state = path.join(home, 'state', 'hermes-desktop-rune'), inspection = path.join(directory, 'inspection')
   fs.mkdirSync(state, {recursive: true, mode: 0o700}); fs.mkdirSync(inspection, {recursive: true})
   active = {name, config, directory, home, state, inspection, child: null, log: '', windows: new Map(), env: {...env, HOME: home, USERPROFILE: home, XDG_STATE_HOME: path.join(home, 'state'), XDG_CONFIG_HOME: path.join(home, 'config'), XDG_DATA_HOME: path.join(home, 'data'), XDG_CACHE_HOME: path.join(home, 'cache'), HERMES_HOME: path.join(home, 'unused-agent')}}
   let credentials = null
@@ -541,9 +553,19 @@ async function vertical() {
   const childPid = children.find(pid => { try { return input('search','--onlyvisible','--pid',pid).trim().split('\n').includes(childWindow) } catch { return false } })
   checked('parent spawned native web host', !!childPid && processes.some(line => line.includes('--native-web-host')))
   const g = geometry(childWindow)
+  if (fileProof) { focusXid(childWindow); input('mousemove', g.x + 180, g.y + 25, 'click', 1); input('key', 'End', 'Return'); await delay(500) }
   focusXid(childWindow); input('mousemove', g.x + 320, g.y + 106, 'click', 1)
-  await wait('SDK button callback reached private gateway', () => requests.find(r => r.method === 'native.proof' && r.params?.click === 1), 15000)
+  await wait('SDK button callback reached private gateway', () => requests.find(r => r.case === active.name && r.method === 'native.proof' && r.params?.click === 1), 15000)
   checked('SDK button callback reached its source and profile', true)
+  if (fileProof) {
+    const proof = requests.find(r => r.case === active.name && r.method === 'native.proof' && r.params?.click === 1)
+    assert.deepEqual(proof.params.file, {before: !!active.config.existing, text: 'saved by SDK', entries: ['note.txt']})
+    const file = path.join(active.state, 'plugin-files', 'data', hash('installed-sdk-proof'), 'note.txt')
+    assert.equal(fs.readFileSync(file, 'utf8'), 'saved by SDK')
+    checked('real SDK wrote and read its private file through the native manager', true)
+    if (active.config.existing) checked('private plugin file survived a full application restart', true)
+    return
+  }
   await captureXid('sdk-clicked', childWindow)
   focus(main.id); await click(main.id, 'capabilities-installed-desktop-plugins'); await delay(1500)
   const after = execFileSync('ps', ['-eo', 'pid,ppid,args'], {encoding:'utf8'}).split('\n').filter(line => Number(line.trim().split(/\s+/)[1]) === active.child.pid && line.includes('--native-web-host'))
@@ -573,6 +595,7 @@ try {
   assert.ok(fs.statSync(binary).isFile(), 'Build the ordinary native application before acceptance')
   await privateDisplay()
   await runCase('installed-plugin', {raw: true}, vertical)
+  if (fileProof && !only) await runCase('installed-plugin-restart', {raw: true, persistHome: 'installed-plugin', existing: true}, vertical)
   assert.ok(results.length, 'No selected native case ran')
   if (failure) throw failure
   assert.equal(hash(fs.readFileSync(binary)), binarySha, 'Candidate changed during acceptance')

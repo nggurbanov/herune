@@ -5,9 +5,15 @@ use crate::{gateway::prepared::ProfileProvenance, pages::PageRequest, source::Pr
 pub struct Receipt {
     owner: Owner,
     scope: Scope,
-    generation: u64,
+    id: Option<String>,
     request_scope: DraftScope,
     _binding: Binding,
+}
+pub struct Intent {
+    owner: Owner,
+    scope: Scope,
+    id: Option<String>,
+    binding: Binding,
 }
 impl Viewer {
     pub fn project_set_active(
@@ -18,8 +24,7 @@ impl Viewer {
         id: Option<String>,
         binding: Binding,
     ) {
-        if self.fleet_state.project_active_pending.is_some()
-            || !self.project_owner_is_current(&owner)
+        if !self.project_owner_is_current(&owner)
             || self.fleet_state.projects.scope != scope
             || self.fleet_state.projects.generation() != generation
         {
@@ -37,6 +42,15 @@ impl Viewer {
         if binding.stamp() != &owner.session.source || binding.validate().is_err() {
             return;
         }
+        if self.fleet_state.project_active_pending.is_some() {
+            self.fleet_state.project_active_queued = Some(Intent {
+                owner,
+                scope,
+                id,
+                binding,
+            });
+            return;
+        }
         let provenance = match owner.session.profile_intent {
             ProfileIntent::Backend => ProfileProvenance::Backend(owner.session.profile.clone()),
             ProfileIntent::NativeSelf => ProfileProvenance::NativeSelf,
@@ -52,7 +66,7 @@ impl Viewer {
         let receipt = Receipt {
             owner,
             scope,
-            generation,
+            id,
             request_scope: self.composer_scope(),
             _binding: binding,
         };
@@ -65,7 +79,10 @@ impl Viewer {
             )
         });
         match result {
-            Ok(()) => self.fleet_state.project_active_pending = Some(receipt),
+            Ok(()) => {
+                self.fleet_state.project_active_result = None;
+                self.fleet_state.project_active_pending = Some(receipt);
+            }
             Err(error) => {
                 self.fleet_state.project_active_result =
                     Some(format!("Set active failed or is uncertain: {error}"))
@@ -92,13 +109,28 @@ impl Viewer {
             self.fleet_state.project_active_pending = Some(receipt);
             return false;
         };
-        let current = self.project_owner_is_current(&receipt.owner)
-            && self.fleet_state.projects.scope == receipt.scope
-            && self.fleet_state.projects.generation() == receipt.generation;
+        let mut current = self.project_owner_is_current(&receipt.owner)
+            && self.fleet_state.projects.scope == receipt.scope;
         let result = reply.result.and_then(|v| match v.get("active_id") {
-            Some(value) if value.is_null() || value.is_string() => Ok(()),
+            Some(value) if value == &serde_json::json!(receipt.id) => Ok(()),
             _ => Err("Active project was not confirmed by the agent".into()),
         });
+        if let Some(next) = self.fleet_state.project_active_queued.take() {
+            let same_owner = next.owner.session == receipt.owner.session;
+            let still_selected = self.project_owner_is_current(&next.owner)
+                && self.fleet_state.projects.scope == next.scope;
+            if still_selected && result.is_ok() && same_owner && next.id == receipt.id {
+                current = true;
+            }
+            if still_selected
+                && (result.is_ok() || !same_owner)
+                && !(result.is_ok() && same_owner && next.id == receipt.id)
+            {
+                let generation = self.fleet_state.projects.generation();
+                self.project_set_active(next.owner, next.scope, generation, next.id, next.binding);
+                return true;
+            }
+        }
         if current && result.is_ok() {
             if self.fleet_state.projects_pending.is_some() {
                 self.fleet_state.project_active_refresh = Some(receipt.owner.clone());

@@ -1,4 +1,5 @@
 //! Client-owned preferences and private runtime files, never an agent home.
+pub(crate) mod clipboard_image;
 mod file_lock;
 pub(crate) use file_lock::FileLock;
 pub mod fleet;

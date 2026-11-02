@@ -446,3 +446,366 @@ fn native_root_create_requires_matching_authority_before_rpc() {
     );
     server.join().unwrap();
 }
+
+#[test]
+fn agent_plugin_lifecycle_uses_scoped_page_rpc_and_authoritative_lists() {
+    use crate::pages::capabilities::{Action, Capabilities, Mode, Selection};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = connection(&listener, BackendTarget::Named("selected".into()));
+    let sha = "a".repeat(40);
+    let row = |status: &str| json!({"key":"notes","name":"Notes","source":"user","status":status,"settings_schema":[{"key":"limit","type":"number","value":6}]});
+    let params = |body: Value| {
+        let mut body = body.as_object().unwrap().clone();
+        body.insert("profile".into(), json!("work"));
+        json!({"method":"plugins.manage","params":body})
+    };
+    let list = || params(json!({"action":"list"}));
+    let installed = |status| json!({"plugins":[row(status)]});
+    let peer = server(
+        listener,
+        vec![
+            (list(), json!({"plugins":[]})),
+            (
+                params(json!({"action":"inspect","identifier":"fixture:notes"})),
+                json!({"ok":true,"agent":true,"sha":sha}),
+            ),
+            (
+                params(
+                    json!({"action":"install","identifier":"fixture:notes","inspected_sha":sha,"enable":true,"force":false}),
+                ),
+                json!({"ok":true,"restart_required":true}),
+            ),
+            (
+                list(),
+                json!({"plugins":[{"key":"notes","name":"Notes","source":"user","status":"enabled","settings_schema":[{"key":"limit","type":"number","value":5}]}]}),
+            ),
+            (
+                params(json!({"action":"settings","key":"notes","values":{"limit":6.0}})),
+                json!({"ok":true}),
+            ),
+            (
+                list(),
+                json!({"plugins":[{"key":"notes","name":"Notes","source":"user","status":"enabled","settings_schema":[{"key":"limit","type":"number","value":6}]}]}),
+            ),
+            (
+                params(json!({"action":"toggle","key":"notes","enable":false})),
+                json!({"ok":true}),
+            ),
+            (list(), installed("disabled")),
+            (list(), installed("disabled")),
+            (
+                params(json!({"action":"toggle","key":"notes","enable":true})),
+                json!({"ok":true}),
+            ),
+            (list(), installed("enabled")),
+            (
+                params(
+                    json!({"action":"update","name":"Notes","accept_capabilities":false,"force":false}),
+                ),
+                json!({"ok":true}),
+            ),
+            (list(), installed("enabled")),
+            (
+                params(json!({"action":"remove","name":"Notes"})),
+                json!({"ok":true}),
+            ),
+            (list(), json!({"plugins":[]})),
+        ],
+    );
+    let mut network = PageNetwork::default();
+    network.init(Arc::new(|| {}));
+    let dispatch = |state: &mut Capabilities,
+                    network: &mut PageNetwork,
+                    effects: Vec<crate::pages::PageEffect>| {
+        let mut queue = std::collections::VecDeque::from(effects);
+        while let Some((operation, request)) = queue.pop_front() {
+            let result = run(
+                network,
+                connection.clone(),
+                1,
+                &request.path,
+                request.body,
+                ProfileProvenance::Backend("work".into()),
+            );
+            queue.extend(state.apply(&operation, result));
+        }
+    };
+    let fresh = || {
+        let mut state = Capabilities::new();
+        state.profile = Some("work".into());
+        state.mode = Mode::Plugins;
+        state
+    };
+    let mut state = fresh();
+    let effects = state.load();
+    dispatch(&mut state, &mut network, effects);
+    state.act(Action::Select(Selection::InstallPlugin));
+    state.source.replace_text("fixture:notes");
+    let effects = state.act(Action::InspectPlugin);
+    dispatch(&mut state, &mut network, effects);
+    let effects = state.act(Action::InstallPlugin);
+    dispatch(&mut state, &mut network, effects);
+    assert!(state.message.as_deref().unwrap().contains("restart"));
+    assert_eq!(state.plugins[0]["status"], "enabled");
+    state.act(Action::Select(Selection::Plugin("notes".into())));
+    state.fields[0].input.replace_text("6");
+    let effects = state.act(Action::SavePluginSettings);
+    dispatch(&mut state, &mut network, effects);
+    assert_eq!(state.fields[0].input.text, "6");
+    let effects = state.act(Action::TogglePlugin("notes".into(), false));
+    dispatch(&mut state, &mut network, effects);
+    assert_eq!(state.plugins[0]["status"], "disabled");
+    let mut recreated = fresh();
+    let effects = recreated.load();
+    dispatch(&mut recreated, &mut network, effects);
+    assert_eq!(recreated.plugins[0]["status"], "disabled");
+    assert_eq!(recreated.plugins[0]["settings_schema"][0]["value"], 6);
+    let effects = recreated.act(Action::TogglePlugin("notes".into(), true));
+    dispatch(&mut recreated, &mut network, effects);
+    recreated.act(Action::Select(Selection::Plugin("notes".into())));
+    let effects = recreated.act(Action::UpdatePlugin("Notes".into(), false, false));
+    dispatch(&mut recreated, &mut network, effects);
+    let effects = recreated.act(Action::RemovePlugin("Notes".into()));
+    dispatch(&mut recreated, &mut network, effects);
+    assert!(recreated.plugins.is_empty());
+    assert!(recreated.selection.is_none());
+    peer.join().unwrap();
+}
+
+#[test]
+fn delayed_plugin_write_keeps_its_source_and_cannot_repaint_replacement_owner() {
+    let a = TcpListener::bind("127.0.0.1:0").unwrap();
+    let b = TcpListener::bind("127.0.0.1:0").unwrap();
+    let ca = connection(&a, BackendTarget::Named("selected".into()));
+    let cb = connection(&b, BackendTarget::Named("selected".into()));
+    let (seen_tx, seen_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let old = thread::spawn(move || {
+        let (stream, _) = a.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut socket = tungstenite::accept(stream).unwrap();
+        let frame: Value =
+            serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap();
+        assert_eq!(frame["method"], "plugins.manage");
+        assert_eq!(
+            frame["params"],
+            json!({"profile":"work","action":"toggle","key":"notes","enable":false})
+        );
+        seen_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        socket
+            .send(Message::Text(
+                json!({"jsonrpc":"2.0","id":frame["id"],"result":{"ok":true}})
+                    .to_string()
+                    .into(),
+            ))
+            .unwrap();
+    });
+    let new = server(
+        b,
+        vec![(
+            json!({"method":"plugins.manage","params":{"profile":"work","action":"list"}}),
+            json!({"plugins":[{"key":"notes","status":"enabled","source":"user"}]}),
+        )],
+    );
+    let mut network = PageNetwork::default();
+    network.init(Arc::new(|| {}));
+    network
+        .request(
+            &scope(1),
+            ca,
+            "capabilities.write",
+            PageRequest::rpc(
+                "plugins.manage",
+                json!({"action":"toggle","key":"notes","enable":false}),
+            )
+            .profile("work")
+            .provenance(ProfileProvenance::Backend("work".into())),
+        )
+        .unwrap();
+    seen_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    let current = run(
+        &mut network,
+        cb,
+        2,
+        "plugins.manage",
+        json!({"action":"list"}),
+        ProfileProvenance::Backend("work".into()),
+    )
+    .unwrap();
+    assert_eq!(current["plugins"][0]["status"], "enabled");
+    release_tx.send(()).unwrap();
+    old.join().unwrap();
+    new.join().unwrap();
+    // The old completion is drained under the replacement owner and never delivered to it.
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        assert!(network.poll(&scope(2)).is_empty());
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn plugin_settings_secret_and_values_use_real_scoped_save_transaction() {
+    use crate::pages::capabilities::{Action, Capabilities, Mode, Selection};
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("fixture-token".into()),
+    };
+    let peer = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let _socket = tungstenite::accept(stream).unwrap();
+        let (mut http, _) = listener.accept().unwrap();
+        http.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reader = BufReader::new(&mut http);
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        let target = first.split_whitespace().nth(1).unwrap();
+        let url = Url::parse(&format!("http://fixture{target}")).unwrap();
+        assert_eq!(url.path(), "/api/env");
+        assert!(
+            url.query_pairs()
+                .any(|(key, value)| key == "profile" && value == "work")
+        );
+        assert!(!url.query_pairs().any(|(key, _)| key == "token"));
+        let mut auth = false;
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if line.to_ascii_lowercase().trim() == "x-hermes-session-token: fixture-token" {
+                auth = true;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse::<usize>().unwrap();
+            }
+        }
+        assert!(auth);
+        let mut bytes = vec![0; length];
+        reader.read_exact(&mut bytes).unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["key"], "NOTES_TOKEN");
+        assert!(body["value"] == "disposable-fixture-secret");
+        write!(http, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{{\"ok\":true}}").unwrap();
+        for (action, result) in [
+            ("settings", json!({"ok":true})),
+            (
+                "list",
+                json!({"plugins":[{"key":"notes","name":"Notes","source":"user","settings_schema":[{"key":"token","type":"secret","env":"NOTES_TOKEN","has_value":true},{"key":"limit","type":"number","value":8}]}]}),
+            ),
+        ] {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            let frame: Value =
+                serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap();
+            assert_eq!(frame["method"], "plugins.manage");
+            assert_eq!(frame["params"]["profile"], "work");
+            assert_eq!(frame["params"]["action"], action);
+            if action == "settings" {
+                assert_eq!(frame["params"]["values"], json!({"limit":8.0}));
+            }
+            socket
+                .send(Message::Text(
+                    json!({"jsonrpc":"2.0","id":frame["id"],"result":result})
+                        .to_string()
+                        .into(),
+                ))
+                .unwrap();
+        }
+    });
+    let mut state = Capabilities::new();
+    state.profile = Some("work".into());
+    state.mode = Mode::Plugins;
+    state.plugins = vec![
+        json!({"key":"notes","name":"Notes","source":"user","settings_schema":[{"key":"token","type":"secret","env":"NOTES_TOKEN"},{"key":"limit","type":"number","value":2}]}),
+    ];
+    state.act(Action::Select(Selection::Plugin("notes".into())));
+    state.fields[0]
+        .input
+        .replace_text("disposable-fixture-secret");
+    state.fields[1].input.replace_text("8");
+    let mut queue = std::collections::VecDeque::from(state.act(Action::SavePluginSettings));
+    let mut network = PageNetwork::default();
+    network.init(Arc::new(|| {}));
+    let scope = scope(1);
+    while let Some((operation, request)) = queue.pop_front() {
+        network
+            .request(&scope, connection.clone(), &operation, request)
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let result = loop {
+            if let Some(reply) = network
+                .poll(&scope)
+                .into_iter()
+                .find(|reply| !reply.progress)
+            {
+                break reply.result;
+            }
+            assert!(Instant::now() < deadline, "missing transaction reply");
+            thread::sleep(Duration::from_millis(2));
+        };
+        queue.extend(state.apply(&operation, result));
+    }
+    assert!(state.fields[0].input.text.is_empty());
+    assert!(state.fields[0].has_value);
+    assert_eq!(state.fields[1].input.text, "8");
+    peer.join().unwrap();
+}
+
+#[test]
+fn plugin_lost_install_reply_is_reported_without_automatic_duplicate_install() {
+    use crate::pages::capabilities::{Action, Capabilities, Mode};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = connection(&listener, BackendTarget::Named("selected".into()));
+    let peer = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut socket = tungstenite::accept(stream).unwrap();
+        let frame: Value =
+            serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap();
+        assert_eq!(frame["params"]["action"], "install");
+        drop(socket);
+        listener.set_nonblocking(true).unwrap();
+        let until = Instant::now() + Duration::from_millis(300);
+        while Instant::now() < until {
+            match listener.accept() {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(2))
+                }
+                Ok(_) => panic!("install was automatically repeated"),
+                Err(error) => panic!("fixture listener failed: {error}"),
+            }
+        }
+    });
+    let mut state = Capabilities::new();
+    state.mode = Mode::Plugins;
+    state.profile = Some("work".into());
+    state.source.replace_text("fixture:notes");
+    state.inspected_source = state.source.text.clone();
+    state.inspection = json!({"ok":true,"agent":true,"sha":"a".repeat(40)});
+    let (operation, request) = state.act(Action::InstallPlugin).pop().unwrap();
+    let mut network = PageNetwork::default();
+    network.init(Arc::new(|| {}));
+    let result = run(
+        &mut network,
+        connection,
+        1,
+        &request.path,
+        request.body,
+        ProfileProvenance::Backend("work".into()),
+    );
+    assert!(result.is_err());
+    assert!(state.apply(&operation, result).is_empty());
+    assert!(!state.busy());
+    assert!(state.errors.contains_key("capabilities.write"));
+    peer.join().unwrap();
+}

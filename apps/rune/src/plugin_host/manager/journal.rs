@@ -8,7 +8,10 @@ pub(super) fn path_for_storage(storage: &Path) -> Result<std::path::PathBuf, Str
         .ok_or("Invalid plugin storage path")?
         .join("prepared-submissions.json"))
 }
-fn locked<T>(path: &Path, operation: impl FnOnce(&Path) -> Result<T, String>) -> Result<T, String> {
+pub(super) fn locked<T>(
+    path: &Path,
+    operation: impl FnOnce(&Path) -> Result<T, String>,
+) -> Result<T, String> {
     let parent = path.parent().ok_or("Invalid journal path")?;
     std::fs::create_dir_all(parent).map_err(|_| "Journal directory unavailable")?;
     #[cfg(unix)]

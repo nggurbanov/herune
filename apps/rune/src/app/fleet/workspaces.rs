@@ -78,6 +78,34 @@ impl Viewer {
         epochs.dedup();
         epochs
     }
+    pub(in crate::app) fn reconcile_parked_sidebar_running(
+        &mut self,
+        scopes: &[DraftScope],
+    ) -> bool {
+        let workspaces = self
+            .fleet_state
+            .workspaces
+            .values()
+            .filter(|workspace| workspace.valid())
+            .map(|workspace| {
+                (
+                    workspace.binding.stamp().key(),
+                    (workspace.binding.stamp().clone(), workspace.epoch),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut changed = false;
+        for (key, partition) in &mut self.fleet_state.partitions {
+            let epoch = workspaces.get(key).and_then(|(stamp, epoch)| {
+                (!partition.is_retired()
+                    && partition.stamp() == stamp
+                    && partition.binding().validate().is_ok())
+                .then_some(*epoch)
+            });
+            changed |= partition.state_mut().set_retained_running(epoch, scopes);
+        }
+        changed
+    }
     pub(in crate::app) fn inspect_parked_sources(&self) -> Vec<serde_json::Value> {
         self.fleet_state.workspaces.values().map(|workspace| {
             let scope = DraftScope {

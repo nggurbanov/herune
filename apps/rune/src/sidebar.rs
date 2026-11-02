@@ -10,6 +10,7 @@ pub mod fleet;
 mod owned_tests;
 mod persistence;
 mod receipt;
+mod search;
 #[cfg(test)]
 mod tests;
 use rune::TextEdit;
@@ -17,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-const LOCAL_SOURCES: &str = "acp,cli,codex,desktop,gateway,kanban,local,oneshot,tui";
+const LOCAL_SOURCES: &str = "acp,cli,codex,desktop,gateway,gui,kanban,local,oneshot,tui";
 const MESSAGING_SOURCES: &str = "telegram,discord,slack,mattermost,matrix,signal,whatsapp,bluebubbles,photon,homeassistant,email,sms,webhook,api_server,weixin,wecom,qqbot,yuanbao,dingtalk,feishu";
 #[derive(Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -238,6 +239,7 @@ pub struct SidebarState {
     pub open_select: Option<String>,
     pub menu: Option<(String, String, rune::PointerPress)>,
     pub live: HashMap<(String, String), Status>,
+    retained_running: HashSet<(String, String, crate::source::ProfileIntent)>,
     pub errors: BTreeMap<String, String>,
     pub pending: HashSet<String>,
     pub notice: Option<String>,
@@ -255,6 +257,7 @@ pub struct SidebarState {
     cron_limit: usize,
     batch_missing: bool,
     live_loaded: bool,
+    live_unsupported: HashSet<String>,
     clock: f64,
     connection_key: String,
     recovery: Option<SavedReceipt>,
@@ -264,6 +267,7 @@ pub struct SidebarState {
     receipt_store: Option<receipt::Store>,
     partition_preferences: bool,
     canonical_profiles: BTreeMap<String, BTreeSet<String>>,
+    search: search::Search,
 }
 impl Default for SidebarState {
     fn default() -> Self {
@@ -274,6 +278,7 @@ impl SidebarState {
     pub fn new() -> Self {
         Self {
             prefs: Preferences::default(),
+            search: search::Search::default(),
             preferences_storage: Default::default(),
             owner_profile: "default".into(),
             owner_connection: 0,
@@ -292,6 +297,7 @@ impl SidebarState {
             open_select: None,
             menu: None,
             live: HashMap::new(),
+            retained_running: HashSet::new(),
             errors: BTreeMap::new(),
             pending: HashSet::new(),
             notice: None,
@@ -309,6 +315,7 @@ impl SidebarState {
             cron_limit: 20,
             batch_missing: false,
             live_loaded: false,
+            live_unsupported: HashSet::new(),
             clock: 0.0,
             connection_key: String::new(),
             recovery: None,
@@ -478,6 +485,8 @@ impl SidebarState {
         Ok(())
     }
     pub fn reset_data(&mut self) {
+        self.search.clear_warning(&mut self.notice);
+        self.search = search::Search::default();
         self.recents = Slice::default();
         self.messaging = Slice::default();
         self.cron_sessions = Slice::default();
@@ -488,7 +497,9 @@ impl SidebarState {
         self.runs.clear();
         self.peek_job = None;
         self.live.clear();
+        self.retained_running.clear();
         self.live_loaded = false;
+        self.live_unsupported.clear();
         self.pending.clear();
         self.errors.clear();
         self.storage.clear();
@@ -609,7 +620,10 @@ impl SidebarState {
         };
         profiles
             .into_iter()
-            .filter(|p| !self.pending.contains(&format!("sidebar.live.{p}")))
+            .filter(|p| {
+                !self.live_unsupported.contains(p)
+                    && !self.pending.contains(&format!("sidebar.live.{p}"))
+            })
             .collect::<Vec<_>>()
             .into_iter()
             .map(|p| {
@@ -649,16 +663,25 @@ impl SidebarState {
             .collect()
     }
     pub fn status(&self, row: &SidebarSession) -> Status {
-        for alias in row
-            .aliases()
-            .into_iter()
-            .filter(|_| row.provenance.as_ref() == self.source.as_ref())
-        {
+        for alias in row.aliases().into_iter().filter(|_| {
+            row.profile_intent.is_backend() && row.provenance.as_ref() == self.source.as_ref()
+        }) {
             if let Some(status) = self.live.get(&(row.profile().into(), alias.into())) {
                 if *status != Status::Idle {
                     return *status;
                 }
             }
+        }
+        if row.provenance.as_ref() == self.source.as_ref()
+            && row.aliases().into_iter().any(|id| {
+                self.retained_running.contains(&(
+                    row.profile().to_owned(),
+                    id.to_owned(),
+                    row.profile_intent,
+                ))
+            })
+        {
+            return Status::Working;
         }
         if row.scheduler_owned == Some(true) {
             return Status::Working;
@@ -671,6 +694,43 @@ impl SidebarState {
             Status::Idle
         }
     }
+    pub(crate) fn reconcile_retained_running(
+        &mut self,
+        source: Option<&SourceStamp>,
+        epoch: u64,
+        scopes: &[crate::composer::DraftScope],
+    ) -> bool {
+        let epoch =
+            (source.is_some() && source == self.source.as_ref() && epoch == self.owner_connection)
+                .then_some(epoch);
+        self.set_retained_running(epoch, scopes)
+    }
+
+    // The partition has its own read epoch; a retained workspace has a separate
+    // conversation epoch. Its caller must first validate the exact source binding.
+    pub(crate) fn set_retained_running(
+        &mut self,
+        epoch: Option<u64>,
+        scopes: &[crate::composer::DraftScope],
+    ) -> bool {
+        let next: HashSet<_> = scopes
+            .iter()
+            .filter(|scope| Some(scope.connection) == epoch)
+            .filter_map(|scope| {
+                scope
+                    .session
+                    .as_ref()
+                    .filter(|id| !id.is_empty())
+                    .map(|id| (scope.profile.clone(), id.clone(), scope.profile_intent))
+            })
+            .collect();
+        if self.retained_running == next {
+            return false;
+        }
+        self.retained_running = next;
+        true
+    }
+
     pub fn matches(&self, row: &SidebarSession, query: &str) -> bool {
         let query = query.trim().to_lowercase();
         (query.is_empty()
@@ -682,7 +742,8 @@ impl SidebarState {
                 source_label(row.source.as_deref().unwrap_or_default())
             )
             .to_lowercase()
-            .contains(&query))
+            .contains(&query)
+            || self.search.matches(row, &query))
             && (!row.archived || self.prefs.archived)
             && (self.prefs.status.is_empty()
                 || self.prefs.status.contains(self.status(row).label()))
@@ -739,6 +800,7 @@ impl SidebarState {
             let Some(parent) = self.all_rows().into_iter().find(|candidate| {
                 candidate.provenance == current.provenance
                     && candidate.profile() == current.profile()
+                    && candidate.profile_intent == current.profile_intent
                     && candidate.aliases().contains(&parent)
                     && candidate.key() != current.key()
             }) else {
@@ -771,7 +833,10 @@ impl SidebarState {
         if self.source.as_ref() != Some(&owner.source) {
             return None;
         }
-        self.find(&owner.profile, id)
+        self.all_rows()
+            .into_iter()
+            .find(|row| row.owner().as_ref() == Some(owner) && row.aliases().contains(&id))
+            .cloned()
     }
     pub fn set_partition_preferences(&mut self, preferences: &Preferences) {
         self.partition_preferences = true;
@@ -790,6 +855,8 @@ impl SidebarState {
     pub fn action(&mut self, action: Action) -> Vec<PageEffect> {
         match action {
             Action::Refresh => {
+                self.live_unsupported.clear();
+                self.search.retry(self.clock);
                 let profile = self.owner_profile.clone();
                 self.load(&profile)
             }
@@ -876,7 +943,8 @@ impl SidebarState {
                     .all_rows()
                     .into_iter()
                     .filter(|r| {
-                        r.unread == Some(true)
+                        r.profile_intent.is_backend()
+                            && r.unread == Some(true)
                             && seen.insert(r.key())
                             && (self
                                 .source
@@ -1101,6 +1169,10 @@ impl SidebarState {
         })
     }
     fn prepare(&mut self, mutation: Mutation) -> Vec<PageEffect> {
+        if !mutation.session.profile_intent.is_backend() {
+            self.notice = Some("Open this local conversation before using its actions.".into());
+            return vec![];
+        }
         if self.demo || self.mutation_inflight {
             return vec![];
         }
@@ -1246,6 +1318,22 @@ impl SidebarState {
         ]
     }
     pub fn apply(&mut self, op: &str, result: Result<Value, String>) -> Vec<PageEffect> {
+        if op == "sidebar.search" || op.starts_with("sidebar.search.") {
+            self.apply_search(op, result);
+            return vec![];
+        }
+        let refreshes_recents = matches!(op, "sidebar.batch" | "sidebar.recents");
+        if refreshes_recents {
+            self.search.unproject(&mut self.recents);
+        }
+        let effects = self.apply_inner(op, result);
+        if refreshes_recents {
+            self.search
+                .project(&mut self.recents, &self.messaging, &self.cron_sessions);
+        }
+        effects
+    }
+    fn apply_inner(&mut self, op: &str, result: Result<Value, String>) -> Vec<PageEffect> {
         self.pending.remove(op);
         let key = op.strip_prefix("sidebar.").unwrap_or(op);
         if key == "mutation" || key == "snapshot" {
@@ -1257,6 +1345,14 @@ impl SidebarState {
         let value = match result {
             Ok(value) => value,
             Err(error) => {
+                if let Some(profile) = key.strip_prefix("live.") {
+                    if error == crate::gateway::LIVE_SCOPE_UNSUPPORTED {
+                        self.live_unsupported.insert(profile.into());
+                        self.live.retain(|(owner, _), _| owner != profile);
+                        self.errors.remove(op);
+                        return vec![];
+                    }
+                }
                 if key == "batch" && error.contains("HTTP 404") {
                     self.batch_missing = true;
                     return self.legacy_slices();
@@ -1333,6 +1429,7 @@ impl SidebarState {
             return self.load(&profile);
         }
         if let Some(profile) = key.strip_prefix("live.") {
+            self.live_unsupported.remove(profile);
             if let Some(source) = &self.source {
                 let invalid = value["sessions"].as_array().is_some_and(|rows| {
                     rows.iter().any(|row| {
@@ -1735,6 +1832,7 @@ pub fn date_rows(rows: Vec<&SidebarSession>, now: f64) -> Vec<ListRow> {
                 rows.iter().any(|candidate| {
                     candidate.provenance == row.provenance
                         && candidate.profile() == row.profile()
+                        && candidate.profile_intent == row.profile_intent
                         && candidate.aliases().contains(&parent)
                         && candidate.key() != row.key()
                 })

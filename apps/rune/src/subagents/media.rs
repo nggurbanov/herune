@@ -199,7 +199,12 @@ mod tests {
             assert_eq!(query.get("profile").unwrap(), "work");
             assert_eq!(query.get("session_id").unwrap(), "child");
             assert_eq!(query.get("path").unwrap(), "/agent/answer.txt");
-            assert_eq!(query.get("token").unwrap(), "synthetic");
+            assert!(!query.contains_key("token"));
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("x-hermes-session-token: synthetic\r\n")
+            );
             write!(
                 stream,
                 "HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nchild result"

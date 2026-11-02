@@ -42,7 +42,12 @@ pub(super) fn history(listener: &TcpListener, messages: Value) {
     }
     assert!(headers.starts_with("GET /api/sessions/stored/messages?"));
     assert!(headers.contains("profile=work"));
-    assert!(headers.contains("token=synthetic-token"));
+    assert!(!headers.lines().next().unwrap().contains("token="));
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains("x-hermes-session-token: synthetic-token\r\n")
+    );
     let body = json!({"profile":"work","session_id":"stored","messages":messages}).to_string();
     write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
 }
@@ -53,7 +58,6 @@ pub(super) fn worker(connection: Connection, scope: DraftScope) -> (Worker, Rece
     let (replies, receive) = mpsc::channel();
     let mut transport = SessionTransport::connect(&connection, &scope.profile).unwrap();
     // Exercise the canonical wire on a synthetic token-authenticated socket.
-    // Production selects it only after the native subprotocol handshake.
     transport.canonical = true;
     (
         Worker {
@@ -71,6 +75,231 @@ pub(super) fn worker(connection: Connection, scope: DraftScope) -> (Worker, Rece
         },
         receive,
     )
+}
+
+#[test]
+fn stream_reconnect_survives_a_long_outage_without_retrying_mutations() {
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 7,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let (replies, receive) = mpsc::channel();
+    let mut worker = Worker {
+        connection: Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        },
+        stored: scope.session.clone(),
+        scope,
+        replies,
+        waker: Arc::new(|| {}),
+        transport: None,
+        epoch: String::new(),
+        last: 0,
+        reconnect_at: Instant::now(),
+        reconnect_attempts: 0,
+        want_reconnect: false,
+    };
+    for _ in 0..300 {
+        worker.failure(None, "disconnected".into(), true);
+        assert!(worker.want_reconnect);
+        assert!(worker.reconnect_at.duration_since(Instant::now()) <= Duration::from_secs(30));
+    }
+    assert!(
+        receive
+            .try_iter()
+            .all(|reply| matches!(reply, Reply::Failed { id: None, .. }))
+    );
+    worker.failure(Some("send-id".into()), "uncertain send".into(), false);
+    assert!(!worker.want_reconnect);
+    assert!(
+        matches!(receive.try_recv(), Ok(Reply::Failed { id: Some(id), .. }) if id == "send-id")
+    );
+}
+
+#[test]
+fn remote_authority_new_chat_uses_fenced_create_and_admission() {
+    let root =
+        std::env::temp_dir().join(format!("herune-remote-authority-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        ws.send(Message::Text(json!({"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}).to_string().into())).unwrap();
+        let probe = request(&mut ws, "profiles.list");
+        answer(&mut ws, &probe, json!({"profiles":[{"name":"work"}]}));
+        let create = request(&mut ws, "session.create");
+        assert!(create["params"]["request_id"].as_str().is_some());
+        assert!(create["params"].get("idempotency_key").is_none());
+        answer(&mut ws, &create, snapshot(false, 0));
+        history(&listener, json!([]));
+        let submit = request(&mut ws, "prompt.submit");
+        assert_eq!(submit["params"]["text"], "Hello");
+        assert!(submit["params"].get("surface").is_none());
+        assert!(submit["params"]["submission_id"].as_str().is_some());
+        answer(
+            &mut ws,
+            &submit,
+            json!({"admission_id":"admission","ref":{"profile_id":"fixture-profile","session_id":"live"},"status":"started","sequence":1,"execution_generation":1,"authority_epoch":7}),
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Hello".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = prepared.submission_id.clone();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&prepared).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    worker.submit(prepared, &journal).unwrap();
+    assert!(journal.load(&id).is_err());
+    server.join().unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn remote_authority_edit_resumes_and_rewinds_before_sending() {
+    let root = std::env::temp_dir().join(format!("herune-remote-edit-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        ws.send(Message::Text(json!({"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}).to_string().into())).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        let rewind = request(&mut ws, "session.mutate");
+        assert_eq!(rewind["params"]["operation"], "rewind");
+        assert_eq!(rewind["params"]["payload"]["target_message_id"], 91);
+        assert_eq!(rewind["params"]["expected_revision"], 2);
+        assert_eq!(rewind["params"]["expected_generation"], 0);
+        assert!(rewind["params"]["request_id"].as_str().is_some());
+        answer(
+            &mut ws,
+            &rewind,
+            json!({"session_id":"live","operation":"rewind","revision":3}),
+        );
+        let readback = request(&mut ws, "session.resume");
+        let mut current = snapshot(false, 0);
+        current["revision"] = json!(3);
+        answer(&mut ws, &readback, current);
+        history(&listener, json!([]));
+        let submit = request(&mut ws, "prompt.submit");
+        assert_eq!(submit["params"]["text"], "Corrected");
+        assert!(submit["params"]["submission_id"].as_str().is_some());
+        answer(
+            &mut ws,
+            &submit,
+            json!({"ref":{"session_id":"live"},"admission_id":"admitted","status":"queued","execution_generation":0}),
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Corrected".into(),
+            rewind: Some(Rewrite {
+                target: 91,
+                revision: 2,
+                generation: 0,
+                restore_only: false,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = prepared.submission_id.clone();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&prepared).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    worker.submit(prepared, &journal).unwrap();
+    assert!(journal.load(&id).is_err());
+    server.join().unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn remote_protocol_disconnect_retains_unsent_draft() {
+    let root = std::env::temp_dir().join(format!("herune-probe-failure-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        request(&mut ws, "profiles.list");
+        drop(ws);
+    });
+    let scope = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Keep this draft".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = prepared.submission_id.clone();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&prepared).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    assert!(worker.submit(prepared, &journal).is_err());
+    let retained = journal.load(&id).unwrap();
+    assert_eq!(retained.input.text, "Keep this draft");
+    assert!(!retained.attempted && retained.canonical.is_none());
+    server.join().unwrap();
+    drop(worker);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -384,6 +613,108 @@ fn uncertain_ack_retries_the_same_admission_without_creating_a_second_chat_or_bu
     assert!(view.admissions.is_empty());
     assert!(journal.load(&entry.submission_id).is_err());
     server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bot_registry_retries_legacy_title_lookup_without_changing_profile() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let first = request(&mut ws, "session.list");
+        assert_eq!(first["params"]["scope"], "stored");
+        ws.send(Message::Text(json!({"jsonrpc":"2.0","id":first["id"],"error":{"code":4000,"message":"invalid params for session.list: scope: Extra inputs are not permitted"}}).to_string().into())).unwrap();
+        let retry = request(&mut ws, "session.list");
+        assert!(retry["params"].get("scope").is_none());
+        assert_eq!(retry["params"]["title"], "Bot Chat");
+        assert_eq!(retry["params"]["include_hidden"], true);
+        answer(
+            &mut ws,
+            &retry,
+            json!({"sessions":[{"id":"root","resolved_id":"tip","title":"Bot Chat"}]}),
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    assert_eq!(worker.bot_registry().unwrap().as_deref(), Some("tip"));
+    server.join().unwrap();
+}
+
+#[test]
+fn canonical_bot_chat_reuses_exact_profile_owner_without_creating_a_duplicate() {
+    let root = std::env::temp_dir().join(format!("herune-canonical-bot-{}", uuid::Uuid::new_v4()));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let lookup = request(&mut ws, "session.list");
+        assert_eq!(lookup["params"]["title"], "Bot Chat");
+        assert_eq!(lookup["params"]["include_hidden"], true);
+        assert!(lookup["params"].get("scope").is_none());
+        answer(
+            &mut ws,
+            &lookup,
+            json!({"sessions":[{"session_id":"stored","title":"Bot Chat"}]}),
+        );
+        let resume = request(&mut ws, "session.resume");
+        assert_eq!(resume["params"]["session_id"], "stored");
+        answer(&mut ws, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        let submit = request(&mut ws, "prompt.submit");
+        assert_eq!(submit["params"]["text"], "Hello bot");
+        answer(
+            &mut ws,
+            &submit,
+            json!({"ref":{"session_id":"live"},"admission_id":"admitted","status":"queued","execution_generation":0}),
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Hello bot".into(),
+            canonical_bot: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.clone()).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    assert!(worker.submit(entry, &journal).unwrap().is_none());
+    assert!(journal.load(&id).is_err());
+    server.join().unwrap();
+    drop(worker);
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -801,6 +1132,13 @@ fn lost_rewind_receipt_retries_exact_identity_and_fences_even_after_revision_adv
 
 #[test]
 fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_owned_turn() {
+    // The composer accepts images above the server’s 16 MiB data-URL cap; editing a turn must retain them too.
+    let mut image = vec![0x51; 17 * 1024 * 1024];
+    image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    let expected_image = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(&image)
+    );
     let root = std::env::temp_dir().join(format!("hermes-multimodal-{}", uuid::Uuid::new_v4()));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let connection = Connection::Url {
@@ -810,14 +1148,56 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
     let server = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         stream
-            .set_read_timeout(Some(Duration::from_secs(4)))
+            .set_read_timeout(Some(Duration::from_secs(30)))
             .unwrap();
         let mut ws = tungstenite::accept(stream).unwrap();
         let resume = request(&mut ws, "session.resume");
         answer(&mut ws, &resume, snapshot(false, 0));
         history(&listener, json!([]));
+        let (mut download, _) = listener.accept().unwrap();
+        download
+            .set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
+        let mut reader = BufReader::new(&mut download);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        assert!(request_line.starts_with("GET /api/fs/read-data-url?"));
+        assert!(request_line.contains("profile=work"));
+        assert!(request_line.contains("session_id=stored"));
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        write!(
+            download,
+            "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        drop(download);
+        let (mut raw, _) = listener.accept().unwrap();
+        raw.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
+        let mut reader = BufReader::new(&mut raw);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        assert!(request_line.starts_with("GET /api/fs/download?"));
+        assert!(request_line.contains("profile=work"));
+        assert!(request_line.contains("session_id=stored"));
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        write!(raw, "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", image.len()).unwrap();
+        std::io::Write::write_all(&mut raw, &image).unwrap();
+        drop(raw);
         let (mut http, _) = listener.accept().unwrap();
-        http.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
+        http.set_read_timeout(Some(Duration::from_secs(30)))
+            .unwrap();
         let mut reader = BufReader::new(&mut http);
         let mut headers = String::new();
         let mut length = 0;
@@ -837,7 +1217,7 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
         let mut body = vec![0; length];
         std::io::Read::read_exact(&mut reader, &mut body).unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["data_url"], "data:image/png;base64,aW1hZ2U=");
+        assert!(body["data_url"] == expected_image);
         let response = json!({"path":"/staged/image.png","mime_type":"image/png"}).to_string();
         write!(http,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
         drop(http);
@@ -891,7 +1271,7 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
         session: Some("stored".into()),
     };
     let row = HistoryMessage::from_row(
-        &json!({"role":"user","row_id":91,"text":"Public request","content":[{"type":"text","text":"private-prefix\nPublic request\nprivate-suffix"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aW1hZ2U="}},{"type":"file","path":"data:text/plain;base64,bm90ZXM=","name":"Notes"}]}),
+        &json!({"role":"user","row_id":91,"text":"Public request","content":[{"type":"text","text":"private-prefix\nPublic request\nprivate-suffix"},{"type":"image_url","image_url":{"url":"/saved/photo.png"}},{"type":"file","path":"data:text/plain;base64,bm90ZXM=","name":"Notes"}]}),
     );
     let replay = ReplayBundle::capture(&connection, &scope, &row)
         .unwrap()
@@ -918,6 +1298,112 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
     let (mut worker, _) = worker(connection, scope);
     worker.submit(prepared, &journal).unwrap();
     server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn canonical_chat_uploads_image_larger_than_five_mib() {
+    use std::io::Read;
+    let root = std::env::temp_dir().join(format!("herune-large-image-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("photo.png");
+    let mut image = vec![0x51; 7 * 1024 * 1024];
+    image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    std::fs::write(&file, &image).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let _ws = tungstenite::accept(socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut http = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                _ => return false,
+            }
+        };
+        http.set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut reader = BufReader::new(&mut http);
+        let mut headers = String::new();
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = value.trim().parse::<usize>().unwrap();
+            }
+            headers.push_str(&line);
+        }
+        assert!(headers.starts_with("POST /api/chat/image-upload?"));
+        assert!(headers.contains("profile=work"));
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: synthetic-token\r\n")
+        );
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).unwrap();
+        let body: Value = serde_json::from_slice(&body).unwrap();
+        let encoded = body["data_url"]
+            .as_str()
+            .unwrap()
+            .strip_prefix("data:image/png;base64,")
+            .unwrap();
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap(),
+            image
+        );
+        let response = json!({"path":"/staged/photo.png","mime_type":"image/png"}).to_string();
+        write!(http,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
+        true
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: Some("stored".into()),
+    };
+    let mut prepared = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Look at this".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "photo.png".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    prepared.runtime = Some("live".into());
+    prepared.canonical = Some(true);
+    let journal = Journal::new(root.join("journal")).unwrap();
+    let (mut worker, _) = worker(connection, scope);
+    let result = worker.prepare_files(&mut prepared, &journal);
+    let received = server.join().unwrap();
+    assert!(result.is_ok(), "large image upload failed: {result:?}");
+    assert!(received, "image upload never reached the gateway");
+    assert_eq!(
+        prepared.images,
+        vec![json!({"path":"/staged/photo.png","mime":"image/png"})]
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -1261,4 +1747,1192 @@ fn live_session_info_updates_clean_fields_without_inventing_a_missing_provider()
     );
     assert!(composer.draft(&scope).unwrap().approval_changed);
     server.join().unwrap();
+}
+
+#[path = "plugin_chat_tests.rs"]
+mod plugin_chat_tests;
+
+#[test]
+fn legacy_large_images_require_a_gateway_with_large_frame_support() {
+    for contract in [Some(8), Some(5), None] {
+        let root =
+            std::env::temp_dir().join(format!("herune-large-legacy-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("photo.png");
+        let mut image = vec![0x29; 7 * 1024 * 1024];
+        image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        std::fs::write(&path, &image).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: Some("synthetic-token".into()),
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            if let Some(version) = contract {
+                state["info"]["desktop_contract"] = json!(version);
+            }
+            answer(&mut ws, &resume, state);
+            if contract.is_none() {
+                ws.get_mut()
+                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .unwrap();
+                assert!(
+                    ws.read().is_err(),
+                    "an unknown gateway must not receive a large frame"
+                );
+                return;
+            }
+            let upload = request(
+                &mut ws,
+                if contract.is_some() {
+                    "file.attach"
+                } else {
+                    "image.attach_bytes"
+                },
+            );
+            let encoded = if contract.is_some() {
+                upload["params"]["data_url"]
+                    .as_str()
+                    .unwrap()
+                    .split_once(',')
+                    .unwrap()
+                    .1
+            } else {
+                upload["params"]["content_base64"].as_str().unwrap()
+            };
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+                image
+            );
+            answer(
+                &mut ws,
+                &upload,
+                json!({"attached":true,"path":"/private/large.png"}),
+            );
+            if contract.is_some() {
+                let detach = request(&mut ws, "image.detach");
+                answer(&mut ws, &detach, json!({"detached":false}));
+                let attach = request(&mut ws, "image.attach");
+                assert_eq!(attach["params"]["path"], "/private/large.png");
+                answer(&mut ws, &attach, json!({"attached":true}));
+            }
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
+            connection: 1,
+            profile: "work".into(),
+            session: Some("stored".into()),
+        };
+        let mut prepared = Prepared::new(
+            &connection,
+            &scope,
+            SendInput {
+                text: "Look at this".into(),
+                attachments: vec![AttachmentInput {
+                    path,
+                    name: "photo.png".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        prepared.runtime = Some("live".into());
+        prepared.canonical = Some(false);
+        let journal = Journal::new(root.join("journal")).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        worker.transport.as_mut().unwrap().resume("stored").unwrap();
+        let result = worker.prepare_files(&mut prepared, &journal);
+        if contract.is_some() {
+            assert!(result.is_ok(), "modern legacy upload: {result:?}");
+        } else {
+            assert!(
+                result.is_err(),
+                "unknown legacy version must keep the old limit"
+            );
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn large_documents_require_a_gateway_with_large_frame_support() {
+    for contract in [Some(8), None] {
+        let root =
+            std::env::temp_dir().join(format!("herune-large-document-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("document.pdf");
+        let mut bytes = vec![0x31; 7 * 1024 * 1024];
+        bytes[..8].copy_from_slice(b"%PDF-1.7");
+        std::fs::write(&path, &bytes).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: Some("synthetic-token".into()),
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            if let Some(version) = contract {
+                state["info"]["desktop_contract"] = json!(version);
+            }
+            answer(&mut ws, &resume, state);
+            if contract.is_none() {
+                ws.get_mut()
+                    .set_read_timeout(Some(Duration::from_millis(500)))
+                    .unwrap();
+                assert!(
+                    ws.read().is_err(),
+                    "an unknown gateway must not receive a large frame"
+                );
+                return;
+            }
+            let upload = request(&mut ws, "file.attach");
+            let encoded = upload["params"]["data_url"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("data:application/octet-stream;base64,")
+                .unwrap();
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+                bytes
+            );
+            answer(
+                &mut ws,
+                &upload,
+                json!({"attached":true,"ref_text":"@file:document.pdf"}),
+            );
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            profile_intent: crate::source::ProfileIntent::Backend,
+            connection: 1,
+            profile: "work".into(),
+            session: Some("stored".into()),
+        };
+        let mut prepared = Prepared::new(
+            &connection,
+            &scope,
+            SendInput {
+                text: "Read this".into(),
+                attachments: vec![AttachmentInput {
+                    path,
+                    name: "document.pdf".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        prepared.runtime = Some("live".into());
+        prepared.canonical = Some(false);
+        let journal = Journal::new(root.join("journal")).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        worker.transport.as_mut().unwrap().resume("stored").unwrap();
+        let result = worker.prepare_files(&mut prepared, &journal);
+        if contract.is_some() {
+            assert!(result.is_ok(), "modern gateway upload: {result:?}");
+            assert_eq!(
+                prepared.text.as_deref(),
+                Some("@file:document.pdf\n\nRead this")
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "unknown legacy version must keep the old limit"
+            );
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn oversized_legacy_attachment_is_rejected_before_policy_or_upload_and_retained() {
+    let root =
+        std::env::temp_dir().join(format!("herune-legacy-attachment-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("large.pdf");
+    std::fs::File::create(&path)
+        .unwrap()
+        .set_len(6 * 1024 * 1024)
+        .unwrap();
+    let attachment = AttachmentInput {
+        path,
+        name: "large.pdf".into(),
+    };
+    assert!(validate_transfer_limits(&[attachment.clone()], false, false).is_err());
+    assert!(validate_transfer_limits(&[attachment.clone()], true, false).is_ok());
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let probe = request(&mut ws, "profiles.list");
+        answer(&mut ws, &probe, json!({"profiles":[]}));
+        let create = request(&mut ws, "session.create");
+        answer(&mut ws, &create, snapshot(false, 0));
+        ws.get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        assert!(
+            ws.read().is_err(),
+            "no policy, upload, or prompt mutation is allowed"
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        connection: 1,
+        profile: "work".into(),
+        session: None,
+    };
+    let entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Keep this message".into(),
+            attachments: vec![attachment],
+            approval_mode: Some("smart".into()),
+            approval_changed: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut worker, replies) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    let error = worker
+        .submit(entry, &journal)
+        .unwrap()
+        .expect("local preflight refusal");
+    assert!(error.contains("5 MiB"), "{error}");
+    let retained = journal.load(&id).unwrap();
+    assert_eq!(retained.input.text, "Keep this message");
+    assert!(!retained.attempted && retained.mutations.is_empty());
+    assert!(
+        replies
+            .try_iter()
+            .all(|reply| !matches!(reply, Reply::Snapshot { .. })),
+        "a rejected fresh input must not bind an unpersisted session"
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_idle_proof_requires_one_exact_empty_runtime() {
+    let row = json!({"id":"live","session_key":"stored","status":"idle","message_count":0});
+    assert!(exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[row.clone()]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "other",
+        "stored",
+        &json!({"sessions":[row.clone()]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "other",
+        &json!({"sessions":[row.clone()]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[row.clone(),row]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[{"id":"live","session_key":"stored","status":"working","message_count":0}]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[{"id":"live","session_key":"stored","status":"idle","message_count":1}]}),
+        "idle"
+    ));
+    assert!(!exact_legacy_status(
+        "live",
+        "stored",
+        &json!({"sessions":[{"id":"live","session_key":"stored","status":"idle"}]}),
+        "idle"
+    ));
+}
+#[test]
+fn retry_of_unpersisted_legacy_attachment_uses_only_confirmed_idle_runtime() {
+    let root = std::env::temp_dir().join(format!("herune-lazy-retry-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        state.as_object_mut().unwrap().remove("running");
+        answer(&mut ws, &resume, state);
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"starting","message_count":0,"preview":""}]}),
+        );
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"idle","message_count":0}]}),
+        );
+        let upload = request(&mut ws, "file.attach");
+        answer(
+            &mut ws,
+            &upload,
+            json!({"attached":true,"ref_text":"@file:note.txt"}),
+        );
+        let prompt = request(&mut ws, "prompt.submit");
+        assert_eq!(
+            prompt["params"]["text"],
+            "@file:note.txt\n\nRetry this message"
+        );
+        answer(&mut ws, &prompt, json!({"status":"streaming"}));
+    });
+    let fresh = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: None,
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Retry this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, replies) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    assert!(worker.submit(entry, &journal).unwrap().is_none());
+    assert!(
+        replies
+            .try_iter()
+            .any(|reply| matches!(reply, Reply::Admitted { id: sent, .. } if sent == id))
+    );
+    assert!(
+        journal.load(&id).is_err(),
+        "accepted send must retire the saved intent"
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn first_send_in_existing_empty_lazy_session_uses_confirmed_idle_runtime() {
+    let root = std::env::temp_dir().join(format!("herune-lazy-retry-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        state.as_object_mut().unwrap().remove("running");
+        answer(&mut ws, &resume, state);
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"starting","message_count":0,"preview":""}]}),
+        );
+        let active = request(&mut ws, "session.active_list");
+        answer(
+            &mut ws,
+            &active,
+            json!({"sessions":[{"id":"live","session_key":"stored","status":"idle","message_count":0}]}),
+        );
+        let upload = request(&mut ws, "file.attach");
+        answer(
+            &mut ws,
+            &upload,
+            json!({"attached":true,"ref_text":"@file:note.txt"}),
+        );
+        let prompt = request(&mut ws, "prompt.submit");
+        assert_eq!(
+            prompt["params"]["text"],
+            "@file:note.txt\n\nRetry this message"
+        );
+        answer(&mut ws, &prompt, json!({"status":"streaming"}));
+    });
+    let fresh = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Retry this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, replies) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    assert!(worker.submit(entry, &journal).unwrap().is_none());
+    assert!(
+        replies
+            .try_iter()
+            .any(|reply| matches!(reply, Reply::Admitted { id: sent, .. } if sent == id))
+    );
+    assert!(
+        journal.load(&id).is_err(),
+        "accepted send must retire the saved intent"
+    );
+    server.join().unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn previously_attempted_legacy_send_refreshes_history_without_resending() {
+    let root = std::env::temp_dir().join(format!("herune-lazy-attempted-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        answer(&mut ws, &resume, state);
+        history(&listener, json!([]));
+        match ws.read() {
+            Ok(Message::Text(frame)) => Some(frame.to_string()),
+            _ => None,
+        }
+    });
+    let fresh = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: None,
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Retry this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    entry.attempted = true;
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    let error = worker.submit(entry, &journal).unwrap_err();
+    drop(worker);
+    let unexpected = server.join().unwrap();
+    assert!(
+        error
+            .message
+            .contains("cannot prove whether this turn was sent"),
+        "{error:?}"
+    );
+    assert!(error.uncertain);
+    assert!(
+        unexpected.is_none(),
+        "an uncertain legacy send must not upload or submit again: {unexpected:?}"
+    );
+    assert_eq!(journal.load(&id).unwrap().input.text, "Retry this message");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_lost_submit_ack_refreshes_without_delivering_a_duplicate() {
+    let root = std::env::temp_dir().join(format!("herune-legacy-ack-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut first = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut first, "session.resume");
+        answer(&mut first, &resume, snapshot(false, 0));
+        history(&listener, json!([]));
+        let prompt = request(&mut first, "prompt.submit");
+        assert_eq!(prompt["params"]["text"], "Only once");
+        // The peer accepts the turn but disconnects before returning a receipt.
+        drop(first);
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut second = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut second, "session.resume");
+        answer(&mut second, &resume, snapshot(false, 0));
+        history(
+            &listener,
+            json!([{"role":"user","content":"Only once","row_id":1}]),
+        );
+        match second.read() {
+            Ok(Message::Text(frame)) => Some(frame.to_string()),
+            _ => None,
+        }
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let entry = Prepared::new(
+        &connection,
+        &scope,
+        SendInput {
+            text: "Only once".into(),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let (mut first, _) = worker(connection.clone(), scope.clone());
+    first.transport.as_mut().unwrap().canonical = false;
+    assert!(first.submit(entry, &journal).unwrap_err().uncertain);
+    drop(first);
+    let saved = journal.load(&id).unwrap();
+    assert!(saved.attempted);
+    let (mut second, replies) = worker(connection, scope);
+    second.transport.as_mut().unwrap().canonical = false;
+    let error = second.submit(saved, &journal).unwrap_err();
+    drop(second);
+    let duplicate = server.join().unwrap();
+    assert!(
+        error.uncertain
+            && error
+                .message
+                .contains("cannot prove whether this turn was sent")
+    );
+    assert!(
+        duplicate.is_none(),
+        "the peer received a second request: {duplicate:?}"
+    );
+    assert!(replies.try_iter().any(|reply| matches!(reply, Reply::Snapshot { history, .. } if history.messages.iter().any(|row| row.content == "Only once"))));
+    assert_eq!(journal.load(&id).unwrap().input.text, "Only once");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn fresh_legacy_retry_rejects_changed_stored_owner_before_upload() {
+    let root = std::env::temp_dir().join(format!("herune-owner-retry-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let file = root.join("note.txt");
+    std::fs::write(&file, "private attachment").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: None,
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_millis(700)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        let mut state = snapshot(false, 0);
+        state["stored_session_id"] = json!("other-stored");
+        state["info"]["lazy"] = json!(true);
+        state["message_count"] = json!(0);
+        answer(&mut ws, &resume, state);
+        ws.read().ok().map(|frame| frame.to_string())
+    });
+    let fresh = DraftScope {
+        draft_origin: Some(crate::composer::DraftOrigin::new()),
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: None,
+    };
+    let mut entry = Prepared::new(
+        &connection,
+        &fresh,
+        SendInput {
+            text: "Keep this message".into(),
+            attachments: vec![AttachmentInput {
+                path: file,
+                name: "note.txt".into(),
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    entry.stored = Some("stored".into());
+    entry.runtime = Some("live".into());
+    entry.canonical = Some(false);
+    let id = entry.submission_id.clone();
+    let journal = Journal::new(root.join("journal")).unwrap();
+    journal.save(&entry).unwrap();
+    let scope = DraftScope {
+        draft_origin: None,
+        session: Some("stored".into()),
+        ..fresh
+    };
+    let (mut worker, _) = worker(connection, scope);
+    worker.transport.as_mut().unwrap().canonical = false;
+    let result = worker.submit(entry, &journal);
+    assert!(result.is_err());
+    assert_eq!(journal.load(&id).unwrap().stored.as_deref(), Some("stored"));
+    drop(worker);
+    assert!(
+        server.join().unwrap().is_none(),
+        "no second request may reach the foreign session"
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_image_retry_detaches_uncertain_attach_and_discard_cleans_queue() {
+    for version in [2, 5, 8] {
+        let root =
+            std::env::temp_dir().join(format!("herune-image-retry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let image = root.join("image.png");
+        std::fs::write(&image, b"\x89PNG\r\n\x1a\nprivate fixture bytes").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: None,
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            state["info"]["desktop_contract"] = json!(version);
+            answer(&mut ws, &resume, state.clone());
+            let stage = request(&mut ws, "file.attach");
+            assert!(
+                stage["params"]["data_url"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("data:image/png;base64,")
+            );
+            answer(
+                &mut ws,
+                &stage,
+                json!({"attached":true,"path":"/private/staged.png"}),
+            );
+            let detach = request(&mut ws, "image.detach");
+            assert_eq!(detach["params"]["path"], "/private/staged.png");
+            answer(&mut ws, &detach, json!({"detached":false}));
+            let attach = request(&mut ws, "image.attach");
+            assert_eq!(attach["params"]["path"], "/private/staged.png");
+            drop(ws); // The agent queued the image, but its acknowledgement was lost.
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            answer(&mut ws, &resume, state.clone());
+            let detach = request(&mut ws, "image.detach");
+            assert_eq!(detach["params"]["path"], "/private/staged.png");
+            answer(&mut ws, &detach, json!({"detached":true}));
+            let attach = request(&mut ws, "image.attach");
+            assert_eq!(attach["params"]["path"], "/private/staged.png");
+            answer(&mut ws, &attach, json!({"attached":true}));
+            let resume = request(&mut ws, "session.resume");
+            answer(&mut ws, &resume, state);
+            let detach = request(&mut ws, "image.detach");
+            assert_eq!(detach["params"]["path"], "/private/staged.png");
+            answer(&mut ws, &detach, json!({"detached":true}));
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "work".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: Some("stored".into()),
+        };
+        let mut entry = Prepared::new(
+            &connection,
+            &scope,
+            SendInput {
+                text: "Look at this".into(),
+                attachments: vec![AttachmentInput {
+                    path: image,
+                    name: "image.png".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        entry.runtime = Some("live".into());
+        entry.stored = Some("stored".into());
+        entry.canonical = Some(false);
+        let id = entry.submission_id.clone();
+        let journal = Journal::new(root.join("journal")).unwrap();
+        journal.save(&entry).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        worker.transport.as_mut().unwrap().resume("stored").unwrap();
+        assert!(
+            worker
+                .prepare_files(&mut entry, &journal)
+                .unwrap_err()
+                .uncertain
+        );
+        let mut retained = journal.load(&id).unwrap();
+        assert_eq!(
+            retained.legacy_image_paths[0].as_deref(),
+            Some("/private/staged.png")
+        );
+        worker.transport = None;
+        worker.transport().unwrap().resume("stored").unwrap();
+        worker.prepare_files(&mut retained, &journal).unwrap();
+        worker.discard(&retained, &journal).unwrap();
+        assert!(journal.load(&id).is_err());
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn image_discard_retains_send_when_runtime_changed_or_cleanup_fails() {
+    for changed_runtime in [true, false] {
+        let root =
+            std::env::temp_dir().join(format!("herune-image-discard-{}", uuid::Uuid::new_v4()));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: None,
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            if changed_runtime {
+                state["session_id"] = json!("other-live");
+            }
+            answer(&mut ws, &resume, state);
+            if !changed_runtime {
+                let _detach = request(&mut ws, "image.detach");
+            }
+            // A dropped detach reply is not proof that the image was removed.
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "work".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: Some("stored".into()),
+        };
+        let mut entry = Prepared::new(&connection, &scope, SendInput::default()).unwrap();
+        entry.runtime = Some("live".into());
+        entry.stored = Some("stored".into());
+        entry.canonical = Some(false);
+        entry
+            .legacy_image_paths
+            .push(Some("/private/staged.png".into()));
+        let id = entry.submission_id.clone();
+        let journal = Journal::new(root.join("journal")).unwrap();
+        journal.save(&entry).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        assert!(worker.discard(&entry, &journal).is_err());
+        assert!(
+            journal.load(&id).is_ok(),
+            "failure must retain the original saved send"
+        );
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn legacy_unknown_contract_keeps_direct_small_image_upload() {
+    for contract in [None, Some(1)] {
+        let root = std::env::temp_dir().join(format!("herune-old-image-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let image = root.join("image.png");
+        let bytes = b"\x89PNG\r\n\x1a\nsmall private image";
+        std::fs::write(&image, bytes).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: None,
+        };
+        let server = thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(4)))
+                .unwrap();
+            let mut ws = tungstenite::accept(socket).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            let mut state = snapshot(false, 0);
+            if let Some(version) = contract {
+                state["info"]["desktop_contract"] = json!(version);
+            }
+            answer(&mut ws, &resume, state);
+            let upload = request(&mut ws, "image.attach_bytes");
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(upload["params"]["content_base64"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(decoded, bytes);
+            answer(&mut ws, &upload, json!({"attached":true}));
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "work".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: Some("stored".into()),
+        };
+        let mut entry = Prepared::new(
+            &connection,
+            &scope,
+            SendInput {
+                text: "hello".into(),
+                attachments: vec![AttachmentInput {
+                    path: image,
+                    name: "image.png".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        entry.runtime = Some("live".into());
+        entry.stored = Some("stored".into());
+        entry.canonical = Some(false);
+        let journal = Journal::new(root.join("journal")).unwrap();
+        let (mut worker, _) = worker(connection, scope);
+        worker.transport.as_mut().unwrap().canonical = false;
+        worker.transport.as_mut().unwrap().resume("stored").unwrap();
+        worker.prepare_files(&mut entry, &journal).unwrap();
+        assert!(entry.legacy_image_paths.is_empty());
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn missing_replay_sequence_refreshes_history_without_publishing_partial_events() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(true, 1));
+        history(&listener, json!([]));
+        let replay = request(&mut ws, "session.events.since");
+        assert_eq!(replay["params"]["last_sequence"], 1);
+        let item = |seq| json!({"session_id":"live","type":"message.delta","seq":seq,"replay_epoch":"fixture-epoch","payload":{"text":format!("chunk-{seq}")}});
+        answer(
+            &mut ws,
+            &replay,
+            json!({"replay_epoch":"fixture-epoch","events":[item(2), item(4)]}),
+        );
+        match ws.read() {
+            Ok(frame) => {
+                let req: Value = serde_json::from_str(&frame.into_text().unwrap()).unwrap();
+                assert_eq!(req["method"], "session.resume");
+                assert_eq!(req["params"]["profile"], "work");
+                answer(&mut ws, &req, snapshot(false, 4));
+                history(&listener, json!([]));
+                true
+            }
+            Err(_) => false,
+        }
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let (mut worker, receive) = worker(connection, scope);
+    worker.attach().unwrap();
+    while receive.try_recv().is_ok() {}
+    let event = Event::from_value(&json!({"session_id":"live","type":"message.delta","seq":4,"replay_epoch":"fixture-epoch","payload":{"text":"latest"}})).unwrap();
+    worker.event(event).unwrap();
+    let replies: Vec<_> = receive.try_iter().collect();
+    let refreshed = server.join().unwrap();
+    assert!(
+        refreshed,
+        "incomplete replay must refresh the stored history"
+    );
+    assert!(replies.iter().any(|r| matches!(r, Reply::Snapshot { .. })));
+    assert!(
+        !replies.iter().any(|r| matches!(r, Reply::Event { .. })),
+        "partial replay must not be published"
+    );
+}
+
+#[test]
+fn complete_replay_publishes_in_order_before_the_live_event() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(true, 1));
+        history(&listener, json!([]));
+        let replay = request(&mut ws, "session.events.since");
+        let item = |seq| json!({"session_id":"live","type":"message.delta","seq":seq,"replay_epoch":"fixture-epoch","payload":{"text":format!("chunk-{seq}")}});
+        answer(
+            &mut ws,
+            &replay,
+            json!({"replay_epoch":"fixture-epoch","events":[item(3), item(2), item(3)]}),
+        );
+        ws.get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        assert!(
+            matches!(ws.read(), Err(tungstenite::Error::Io(error)) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+            "replay must not send another prompt or mutate the conversation"
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let (mut worker, receive) = worker(connection, scope);
+    worker.attach().unwrap();
+    while receive.try_recv().is_ok() {}
+    let event = Event::from_value(&json!({"session_id":"live","type":"message.delta","seq":4,"replay_epoch":"fixture-epoch","payload":{"text":"latest"}})).unwrap();
+    worker.event(event).unwrap();
+    let events: Vec<_> = receive
+        .try_iter()
+        .filter_map(|reply| match reply {
+            Reply::Event { event, replay, .. } => Some((event.sequence.unwrap(), replay)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(events, vec![(2, true), (3, true), (4, false)]);
+    assert_eq!(worker.last, 4);
+    server.join().unwrap();
+}
+
+#[test]
+fn live_completion_covered_by_replay_is_delivered_once_and_refreshes_history() {
+    for (live_sequence, live_kind) in [(4, "message.complete"), (3, "message.delta")] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: Some("synthetic-token".into()),
+        };
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            answer(&mut ws, &resume, snapshot(true, 1));
+            history(&listener, json!([]));
+            let replay = request(&mut ws, "session.events.since");
+            let item = |seq, kind| json!({"session_id":"live","type":kind,"seq":seq,"replay_epoch":"fixture-epoch","payload":{"text":format!("chunk-{seq}")}});
+            answer(
+                &mut ws,
+                &replay,
+                json!({"replay_epoch":"fixture-epoch","events":[item(2,"message.delta"), item(3,"message.delta"), item(4,"message.complete")]}),
+            );
+            match ws.read() {
+                Ok(frame) => {
+                    let req: Value = serde_json::from_str(&frame.into_text().unwrap()).unwrap();
+                    assert_eq!(req["method"], "session.resume");
+                    assert_eq!(req["params"]["profile"], "work");
+                    answer(&mut ws, &req, snapshot(false, 4));
+                    history(&listener, json!([]));
+                    true
+                }
+                Err(_) => false,
+            }
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "work".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: Some("stored".into()),
+        };
+        let (mut worker, receive) = worker(connection, scope);
+        worker.attach().unwrap();
+        while receive.try_recv().is_ok() {}
+        let event = Event::from_value(&json!({"session_id":"live","type":live_kind,"seq":live_sequence,"replay_epoch":"fixture-epoch","payload":{"text":"live event"}})).unwrap();
+        worker.event(event).unwrap();
+        let replies: Vec<_> = receive.try_iter().collect();
+        let refreshed = server.join().unwrap();
+        assert!(refreshed, "live completion must refresh the stored history");
+        let completions: Vec<_> = replies
+            .iter()
+            .filter_map(|r| match r {
+                Reply::Event { event, replay, .. } if event.kind == "message.complete" => {
+                    Some((*replay, event.payload["text"].as_str().unwrap_or_default()))
+                }
+                _ => None,
+            })
+            .collect();
+        let expected = if live_sequence == 4 {
+            (false, "live event")
+        } else {
+            (true, "chunk-4")
+        };
+        assert_eq!(completions, vec![expected]);
+        let live_count = replies.iter().filter(|r| matches!(r, Reply::Event { event, replay: false, .. } if event.sequence == Some(live_sequence))).count();
+        assert_eq!(
+            live_count, 1,
+            "the originally observed live event must be delivered once"
+        );
+        assert!(replies.iter().any(|r| matches!(r, Reply::Snapshot { .. })));
+    }
 }

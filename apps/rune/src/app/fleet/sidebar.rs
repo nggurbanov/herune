@@ -227,6 +227,26 @@ impl Viewer {
                 self.client_error = Some(error);
                 return;
             }
+            if owner.profile_intent == crate::source::ProfileIntent::NativeSelf {
+                if let Action::Open(profile, id) = action {
+                    if profile != owner.profile {
+                        return;
+                    }
+                    let Some(row) = self.sidebar_state.find_owned(&owner, &id) else {
+                        return;
+                    };
+                    if row.source.as_deref() == Some("cron") {
+                        self.sidebar_state.notice = Some("Open scheduled runs from the jobs list to preserve their read-only status.".into());
+                        return;
+                    }
+                    let title = row.title().to_owned();
+                    self.open_page_session_owned(profile, row.id, title, owner.profile_intent);
+                } else {
+                    self.sidebar_state.notice =
+                        Some("Open this local conversation before using its actions.".into());
+                }
+                return;
+            }
             self.sidebar_action(action);
             return;
         }

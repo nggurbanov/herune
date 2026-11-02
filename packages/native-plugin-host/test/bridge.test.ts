@@ -19,12 +19,28 @@ describe('native transport boundaries', () => {
     bridge.receive({ type: 'plugin-response', id: messages[0].id, error: 'This native host operation is unavailable' })
     await expect(result).rejects.toThrow('unavailable'); expect(messages[0].kind).toBe('prepared-submissions-compare-and-set')
   })
-  it('persists only plugin keys in the existing native snapshot', () => {
+  it('persists only the edited plugin key', () => {
     localStorage.clear(); localStorage.setItem('unrelated', 'secret')
     const send = vi.fn(); const bridge = new NativeBridge({ postMessage: send }); const storage = createStorage(bridge, localStorage)
     storage.writeKey('hermes.plugin.example.a', '1')
-    expect(JSON.parse(send.mock.calls[0][0]).values).toEqual({ 'hermes.plugin.example.a': '1' })
+    expect(JSON.parse(send.mock.calls[0][0])).toEqual({ type: 'plugin-storage-patch', key: 'hermes.plugin.example.a', value: '1' })
+    storage.writeKey('hermes.plugin.example.a', null)
+    expect(JSON.parse(send.mock.calls[1][0])).toEqual({ type: 'plugin-storage-patch', key: 'hermes.plugin.example.a', value: null })
     expect(() => storage.writeKey('unrelated', '2')).toThrow()
+  })
+  it('persists only the changed plugin key so another window cannot be overwritten', () => {
+    localStorage.clear()
+    localStorage.setItem('hermes.plugin.other.setting', 'old')
+    const frames: any[] = []
+    const bridge = new NativeBridge({postMessage: message => frames.push(JSON.parse(message))})
+    createStorage(bridge, localStorage).writeKey('hermes.plugin.first.setting', 'new')
+    // The other window has independently saved a newer setting since this
+    // window took its snapshot.
+    const durable: Record<string, string> = {'hermes.plugin.other.setting':'newer'}
+    const frame = frames[0]
+    if (frame.type === 'plugin-storage-patch') durable[frame.key] = frame.value
+    else Object.assign(durable, frame.values)
+    expect(durable).toEqual({'hermes.plugin.other.setting':'newer', 'hermes.plugin.first.setting':'new'})
   })
   it('does not let an old disposer remove a replacement', () => {
     const registry = createRegistry(); const a = registry.register({ id: 'a', area: 'panes' }); registry.register({ id: 'a', area: 'panes', title: 'new' }); a()

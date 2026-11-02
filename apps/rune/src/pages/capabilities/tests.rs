@@ -175,6 +175,42 @@ fn mcp_replacement_waits_for_a_confirmed_complete_map_and_retains_unedited_serve
 }
 
 #[test]
+fn adding_a_stdio_mcp_server_does_not_replace_other_clients_servers() {
+    let mut state = state();
+    state.apply(
+        "capabilities.mcp-config",
+        Ok(json!({"mcp_servers":{"old":{"command":"keep"}}})),
+    );
+    state.selection = Some(Selection::AddMcp);
+    state.mcp_name.replace_text("new-server");
+    state.mcp_command.replace_text("fixture-mcp");
+    state.mcp_args.replace_text(r#"["--serve"]"#);
+    state.mcp_env.replace_text(r#"{"KEY":"value"}"#);
+    let request = only(state.act(Action::SaveMcp));
+    assert!(matches!(request.method, crate::pages::PageMethod::Post));
+    assert_eq!(request.path, "/api/mcp/servers");
+    assert_eq!(
+        request.body,
+        json!({"name":"new-server","command":"fixture-mcp","args":["--serve"],"env":{"KEY":"value"}})
+    );
+}
+
+#[test]
+fn adding_a_url_mcp_server_uses_single_server_request() {
+    let mut state = state();
+    state.apply("capabilities.mcp-config", Ok(json!({"mcp_servers":{}})));
+    state.selection = Some(Selection::AddMcp);
+    state.mcp_name.replace_text("remote");
+    state.mcp_url.replace_text("https://example.invalid/mcp");
+    let request = only(state.act(Action::SaveMcp));
+    assert!(matches!(request.method, crate::pages::PageMethod::Post));
+    assert_eq!(
+        request.body,
+        json!({"name":"remote","url":"https://example.invalid/mcp"})
+    );
+}
+
+#[test]
 fn hosted_policy_uses_member_revision_and_keeps_the_member_disabled_tools() {
     let mut state = state();
     state.policy = json!({"effective":{"revision":"not-authoritative","disabled_tools":{"calendar":["org-tool"]}},"layers":[{"kind":"organization","body":{"mode":"deny","tools":{"calendar":["org-tool"]}}},{"kind":"member","revision":"member-revision","body":{"mode":"deny","tools":{"calendar":["member-tool"]}}}]});
@@ -351,4 +387,96 @@ fn cancelling_while_oauth_start_is_pending_releases_the_returned_flow_in_its_own
     assert_eq!(cancel.body["session_id"], "flow-created-after-cancel");
     state.apply("capabilities.mcp-oauth-cancel", Ok(json!({"ok":true})));
     assert!(!state.busy());
+}
+
+#[test]
+fn removed_plugin_disappears_from_open_detail_after_authoritative_refresh() {
+    let mut state = state();
+    state.mode = Mode::Plugins;
+    state.apply(
+        "capabilities.plugins",
+        Ok(json!({"plugins":[{"key":"notes","name":"Notes","source":"user"}]})),
+    );
+    state.act(Action::Select(Selection::Plugin("notes".into())));
+    state.apply("capabilities.plugins", Ok(json!({"plugins":[]})));
+    assert!(state.selection.is_none());
+    assert!(state.detail.is_null());
+}
+
+#[test]
+fn plugin_update_preserves_consent_and_scan_review_and_removal_can_be_cancelled() {
+    let mut state = state();
+    state.act(Action::RequestConfirmation(Box::new(Confirmation {
+        title: "Remove Notes?".into(),
+        description: "Remove this plugin".into(),
+        action: Action::RemovePlugin("Notes".into()),
+    })));
+    assert!(state.act(Action::Cancel).is_empty());
+    assert!(state.act(Action::Confirm).is_empty());
+    let initial = only(state.act(Action::UpdatePlugin("Notes".into(), false, false)));
+    assert_eq!(initial.body["accept_capabilities"], false);
+    assert!(
+        state
+            .apply(
+                "capabilities.write",
+                Ok(json!({"consent_required":true,"delta_lines":["new capability"]}))
+            )
+            .is_empty()
+    );
+    assert!(state.confirm.is_some());
+    let reviewed = only(state.act(Action::Confirm));
+    assert_eq!(reviewed.body["accept_capabilities"], true);
+    assert_eq!(reviewed.body["force"], false);
+    assert!(
+        state
+            .apply(
+                "capabilities.write",
+                Ok(json!({"scan_blocked":true,"scan_verdict":"caution"}))
+            )
+            .is_empty()
+    );
+    let forced = only(state.act(Action::Confirm));
+    assert_eq!(forced.body["accept_capabilities"], true);
+    assert_eq!(forced.body["force"], true);
+    assert!(
+        state
+            .apply(
+                "capabilities.write",
+                Ok(json!({"scan_blocked":true,"scan_verdict":"blocked"}))
+            )
+            .is_empty()
+    );
+    assert!(state.confirm.is_none());
+    assert!(state.message.as_deref().unwrap().contains("blocked"));
+}
+
+#[test]
+fn plugin_background_install_reports_progress_and_reads_authoritative_list_on_success() {
+    let mut state = state();
+    state.mode = Mode::Plugins;
+    state.source.replace_text("fixture:notes");
+    state.inspected_source = state.source.text.clone();
+    state.inspection = json!({"ok":true,"agent":true,"sha":"a".repeat(40)});
+    only(state.act(Action::InstallPlugin));
+    let poll = only(state.apply(
+        "capabilities.write",
+        Ok(json!({"ok":true,"background":true,"action":"plugin-install"})),
+    ));
+    assert_eq!(poll.path, "/api/actions/plugin-install/status");
+    assert!(state.action_running);
+    assert!(
+        state
+            .apply(
+                "capabilities.action-status",
+                Ok(json!({"running":true,"lines":["Installing fixture"]}))
+            )
+            .is_empty()
+    );
+    assert_eq!(state.action_log, ["Installing fixture"]);
+    let refresh = only(state.apply(
+        "capabilities.action-status",
+        Ok(json!({"running":false,"exit_code":0,"lines":["Complete"]})),
+    ));
+    assert_eq!(refresh.body["action"], "list");
+    assert!(!state.action_running);
 }

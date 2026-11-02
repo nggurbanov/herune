@@ -572,7 +572,10 @@ impl Capabilities {
                     .filter(plugin_visible)
                     .collect();
                 if let Some(Selection::Plugin(key)) = self.selection.clone() {
-                    return self.select(Selection::Plugin(key));
+                    if self.plugins.iter().any(|row| string(row, "key") == key) {
+                        return self.select(Selection::Plugin(key));
+                    }
+                    self.close_detail();
                 }
             }
             "plugin-inspect" => self.inspection = value,
@@ -999,6 +1002,19 @@ impl Capabilities {
         if self.mcp_url.text.trim().is_empty() && self.mcp_command.text.trim().is_empty() {
             self.message = Some("Provide a URL or a command.".into());
             return vec![];
+        }
+        // The create endpoint adds one server under the backend's config lock.
+        // Keep the whole-map editor for fields that create cannot represent.
+        if matches!(self.selection, Some(Selection::AddMcp))
+            && headers.is_empty()
+            && (self.mcp_url.text.trim().is_empty() || (args.is_empty() && env.is_empty()))
+        {
+            let body = if self.mcp_url.text.trim().is_empty() {
+                json!({"name":name,"command":self.mcp_command.text.trim(),"args":args,"env":env})
+            } else {
+                json!({"name":name,"url":self.mcp_url.text.trim()})
+            };
+            return self.write(Action::SaveMcp, PageRequest::post("/api/mcp/servers", body));
         }
         let mut config = self
             .mcp_config

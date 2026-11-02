@@ -43,6 +43,7 @@ pub(super) struct State {
     project_folders_serial: u64,
     project_active_network: crate::pages::PageNetwork,
     project_active_pending: Option<projects::active::Receipt>,
+    project_active_queued: Option<projects::active::Intent>,
     project_active_result: Option<String>,
     project_active_refresh: Option<crate::projects::Owner>,
     project_rename_network: crate::pages::PageNetwork,
@@ -377,7 +378,70 @@ impl Viewer {
             self.sync_fleet_partitions();
             changed = true;
         }
+        let search = self.search.text.clone();
+        let profile_filter = self.sidebar_state.prefs.profiles.clone();
+        let active_source = self
+            .connection
+            .as_ref()
+            .and_then(|c| SourceStamp::from_connection(c).ok());
+        if visible && self.connection.is_some() && self.page_owner_ready() {
+            let mut profiles = vec![self.sidebar_state.owner_profile.clone()];
+            if self.sidebar_state.prefs.all_profiles {
+                profiles.extend(self.profiles.iter().map(|profile| profile.name.clone()));
+            }
+            profiles.sort();
+            profiles.dedup();
+            profiles.retain(|profile| {
+                (profile_filter.is_empty() || profile_filter.contains(profile))
+                    && active_source
+                        .as_ref()
+                        .is_some_and(|source| self.sidebar_profile_visible(source, profile))
+            });
+            let targets = profiles
+                .into_iter()
+                .map(|profile| {
+                    let root = self.profile_intent == crate::source::ProfileIntent::NativeSelf
+                        && profile == self.sidebar_state.owner_profile;
+                    (profile, root)
+                })
+                .collect();
+            let (search_changed, delay, effects) = self
+                .sidebar_state
+                .search_profiles_tick(&search, now, targets);
+            changed |= search_changed;
+            if let Some(delay) = delay {
+                tx.wake_after(delay);
+            }
+            self.page_requests(effects);
+        }
+        let searchable_profiles = self
+            .fleet_state
+            .partitions
+            .values()
+            .map(|partition| {
+                let profiles = partition
+                    .search_profiles()
+                    .into_iter()
+                    .filter(|profile| {
+                        (profile_filter.is_empty() || profile_filter.contains(profile))
+                            && self.sidebar_profile_visible(partition.stamp(), profile)
+                    })
+                    .collect::<Vec<_>>();
+                (partition.stamp().key(), profiles)
+            })
+            .collect::<std::collections::HashMap<_, _>>();
         for partition in self.fleet_state.partitions.values_mut() {
+            if visible && active_source.as_ref() != Some(partition.stamp()) {
+                let profiles = searchable_profiles
+                    .get(&partition.stamp().key())
+                    .cloned()
+                    .unwrap_or_default();
+                let (search_changed, delay) = partition.search(&search, now, profiles);
+                changed |= search_changed;
+                if let Some(delay) = delay {
+                    tx.wake_after(delay);
+                }
+            }
             changed |= partition.poll(now);
         }
         changed |= self.poll_projects();

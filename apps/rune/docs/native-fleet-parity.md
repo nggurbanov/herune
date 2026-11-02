@@ -137,3 +137,76 @@ miniwindow. Exact evidence and limits are in `native-fleet-acceptance.md`.
 
 No user agent/provider, physical microphone/speaker or user keychain is used by
 these isolated acceptance lanes. The full migration goal remains open.
+
+## Status of locally observed conversations (2026-11-02)
+
+The active sidebar combines gateway status with confirmed running streams held
+by this Viewer. The overlay is limited to its exact source stamp, connection
+lifetime, Backend profile and stored session, and is removed when observation
+is lost or the owner is retired. The legacy gateway's untagged process-wide
+active list is not attributed to profiles; its unsupported scoped RPC error
+remains visible. NativeSelf and sessions not observed by this Viewer are not
+covered by this overlay.
+
+A private Linux native run against pinned Hermes and a synthetic local model
+held two ordinary chats open. The active sidebar showed both as Working, then
+cleared each status as its stream stopped or completed. The source/profile
+collision, connection retirement and lost-stream regression passed, as did the
+971-test Linux common suite (15 ignored). This is not macOS or real-provider
+acceptance. Evidence: `standalone-desktop-artifacts/running-status-native-20261102/`.
+
+## Session rename and delete with Hermes (2026-11-02)
+
+A Linux native-window run against an isolated pinned Hermes backend created a
+chat with a local synthetic model, renamed it through the session context menu,
+and confirmed the new title via the backend. It then confirmed Delete in the
+UI and observed a 404 for that session from the same profile. The run used
+Herune binary SHA-256
+`b51a803ebafc480a5878bfde7ab90af3d9b36b1dad19c979b903b037b05aaad6`
+(source `45216cd788`, with no code changes after that executable was built).
+This covers one default-profile chat on Linux, not remote sources, real model
+providers, other history operations, or macOS. Compact evidence is retained at
+`standalone-desktop-artifacts/chat-history-native-20261102/`.
+
+## Running chats on parked sources (2026-11-02)
+
+The fleet sidebar now also projects an already observed running conversation into
+its parked source's sidebar partition. The retained workspace binding and its
+lease must still be valid and match the partition's exact source stamp; only
+that workspace's conversation epoch and Backend profile are considered. A
+completed or disconnected stream, retired partition, or removed workspace
+clears this local overlay. Other sources and same-named profiles do not inherit
+it. No additional gateway connection is opened.
+
+A controller regression exercised two sources with equal session IDs and profile
+names, a second profile, completion, stream loss, and removal of the retained
+workspace. This is synthetic controller evidence, not native-window or real
+multi-gateway acceptance. It covers observed Backend-profile streams in loaded
+partitions; NativeSelf mapping, unobserved sessions and parked-source completion
+notifications remain separate work.
+
+A later Linux native-window check exercised this path with two private synthetic
+gateways. Both had the same profile and session ID; their live-session RPCs
+returned empty lists, so they did not supply the observed status. The old binary
+`b51a803ebafc480a5878bfde7ab90af3d9b36b1dad19c979b903b037b05aaad6`
+showed the still-running parked chat as Idle. With binary
+`032c34ea93fc2027f8d758dc8c9195ecca53595dd1564d3f9934e5685a82b79e`
+(source `a1100d575a`), the parked source reported Working, the other source
+with the same ID stayed Idle, and the parked status returned to Idle after
+Stop. The first fixture attempts needed additional gateway methods; the first
+new-binary attempt also checked the second list before it loaded. The corrected
+run passed. This is not acceptance against real gateways or NativeSelf.
+Evidence: `standalone-desktop-artifacts/parked-session-native-20261102/`.
+
+On 2026-11-02, the sidebar gained a narrow compatibility path for an older
+Hermes that rejects the `scope` parameter of `session.list`. Only the exact
+contract-validation refusal is recognized; other RPC 4000 errors remain
+visible. The client retains statuses observed from its own conversations and
+does not attribute the older process-wide active list to a profile. Thus live
+status of conversations not observed by this client remains unknown on that
+backend. A private Linux native run against the pinned Hermes backend and a
+synthetic model exercised two concurrent sessions, switching and stopping one
+while the other continued; both working indicators appeared and the sidebar
+error was absent. Evidence:
+`standalone-desktop-artifacts/sidebar-live-legacy-20261102/`. This is not a
+macOS acceptance or proof of remote status for unobserved sessions.

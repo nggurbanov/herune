@@ -1,6 +1,14 @@
 use super::*;
-const LIMIT: usize = 5 * 1024 * 1024;
-fn data_url(value: &Value) -> Result<std::sync::Arc<str>, CallError> {
+const FILE_LIMIT: usize = 5 * 1024 * 1024;
+const FROZEN_LIMIT: usize = 64 * 1024 * 1024;
+fn data_url(value: &Value, image: bool) -> Result<std::sync::Arc<str>, CallError> {
+    // Images use the HTTP image-upload endpoint; other files still use the
+    // gateway's bounded WebSocket file.attach payload.
+    let limit = if image {
+        crate::gateway::MAX_CHAT_ATTACHMENT_BYTES
+    } else {
+        FILE_LIMIT
+    };
     let data = value
         .as_str()
         .or(value["data_url"].as_str())
@@ -9,7 +17,7 @@ fn data_url(value: &Value) -> Result<std::sync::Arc<str>, CallError> {
     let (head, encoded) = data
         .split_once(',')
         .ok_or("The stored attachment returned invalid data")?;
-    if !head.starts_with("data:") || !head.ends_with(";base64") || data.len() > LIMIT * 2 {
+    if !head.starts_with("data:") || !head.ends_with(";base64") || data.len() > limit * 2 {
         return Err(
             "The stored attachment has an unsupported encoding or exceeds the safe replay limit"
                 .into(),
@@ -18,8 +26,12 @@ fn data_url(value: &Value) -> Result<std::sync::Arc<str>, CallError> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(encoded)
         .map_err(|_| "The stored attachment encoding is invalid")?;
-    if bytes.len() > LIMIT {
-        return Err("This stored attachment exceeds this gateway's 5 MiB replay limit. History has not been changed".into());
+    if bytes.len() > limit {
+        return Err(format!(
+            "This stored attachment exceeds the {} MiB replay limit. History has not been changed",
+            limit / (1024 * 1024)
+        )
+        .into());
     }
     Ok(data.into())
 }
@@ -44,6 +56,15 @@ impl Worker {
             entry.text = Some(bundle.transport.clone());
             journal.save(entry)?;
         }
+        let mut total: usize = bundle
+            .attachments
+            .iter()
+            .filter_map(|attachment| attachment.frozen.as_ref())
+            .map(|value| value.len())
+            .sum();
+        if total > FROZEN_LIMIT {
+            return Err("This turn exceeds the 64 MiB frozen replay budget. Its history has not been changed".into());
+        }
         // Freeze every byte before a rewind. A failed fetch/size/version check
         // cannot destroy a turn and leave its attachments unrecoverable.
         for index in 0..bundle.attachments.len() {
@@ -55,29 +76,23 @@ impl Worker {
                 let value = if attachment.source.starts_with("data:") {
                     json!(attachment.source)
                 } else {
-                    self.transport()?
-                        .replay_media(&attachment.source, &snapshot.stored)?
+                    self.transport()?.replay_media(
+                        &attachment.source,
+                        &snapshot.stored,
+                        attachment.image,
+                    )?
                 };
-                let frozen = data_url(&value)?;
+                let frozen = data_url(&value, attachment.image)?;
                 if attachment.image && !frozen.starts_with("data:image/") {
                     return Err("A stored image no longer contains image bytes. History has not been changed".into());
+                }
+                total = total.checked_add(frozen.len()).ok_or("This turn exceeds the 64 MiB frozen replay budget. Its history has not been changed")?;
+                if total > FROZEN_LIMIT {
+                    return Err("This turn exceeds the 64 MiB frozen replay budget. Its history has not been changed".into());
                 }
                 entry.input.replay.as_mut().unwrap().attachments[index].frozen = Some(frozen);
                 journal.save(entry)?;
             }
-        }
-        let total: usize = entry
-            .input
-            .replay
-            .as_ref()
-            .unwrap()
-            .attachments
-            .iter()
-            .filter_map(|a| a.frozen.as_ref())
-            .map(|v| v.len())
-            .sum();
-        if total > 64 * 1024 * 1024 {
-            return Err("This turn exceeds the 64 MiB frozen replay budget. Its history has not been changed".into());
         }
         if entry.input.rewind.as_ref().is_some_and(|r| r.restore_only) {
             return Ok(());
@@ -121,5 +136,25 @@ impl Worker {
             journal.save(entry)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn replay_image_limit_matches_upload_without_raising_file_limit() {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(vec![1; FILE_LIMIT + 1]);
+        let image = json!(format!("data:image/png;base64,{encoded}"));
+        assert!(data_url(&image, true).is_ok());
+        assert!(data_url(&image, false).is_err());
+
+        let oversized = base64::engine::general_purpose::STANDARD.encode(vec![
+            1;
+            crate::gateway::MAX_CHAT_ATTACHMENT_BYTES
+                + 1
+        ]);
+        assert!(data_url(&json!(format!("data:image/png;base64,{oversized}")), true).is_err());
     }
 }

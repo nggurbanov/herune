@@ -6,6 +6,15 @@ This is a working migration increment; complete chat parity remains in progress.
 
 ## Implemented
 
+- Bot Chat lookup retries the exact-title, hidden-session read without the newer
+  `scope` parameter only when an older gateway explicitly rejects that parameter.
+  The retry retains the original profile; other failures still prevent creating a
+  duplicate chat. A Linux native test against pinned Hermes `ef75bc7088`, with a
+  private two-profile home and a local synthetic model, verified both chats,
+  separate histories and draft retention across bot switches. A subsequent
+  application Quit and relaunch reopened both original Bot Chats, retained the
+  first draft, and sent a follow-up in the second chat. The gateway stayed running;
+  actual model providers and macOS were not tested in these runs.
 - Stored display rows preserve complete server payloads and durable row IDs.
   Native projection renders ordered text, Markdown/code/tables, readable thought
   disclosures, tool calls with arguments/results, image parts and file actions.
@@ -165,6 +174,495 @@ history hydration.
 - Concurrent tiles, multiple independent draft windows and complete native
   subagent rich-media renderer sharing remain separate migration work.
 
+### Uncertain legacy prompt acknowledgement (2026-11-02)
+
+A legacy gateway may accept a `prompt.submit` containing `submission_id` without
+guaranteeing idempotency. If its response is lost, retrying that request could
+send the same message twice. The retained legacy journal now refreshes the
+owner's history and refuses to re-upload or resend an already attempted turn;
+the saved text remains for explicit review. Canonical idempotent recovery stays
+unchanged. Synthetic socket tests cover a peer accepting the first message and
+disconnecting before acknowledgement, plus an already saved turn with an
+attachment. This does not establish real-provider or macOS acceptance.
+The Linux run passed 44 legacy-related tests and 1,019 common tests, with
+16 ignored in the common run. Evidence is retained in
+`standalone-desktop-artifacts/legacy-uncertain-send-20261102/`.
+
 Original contracts: `src/api/canonical-protocol.ts`, `app/chat/transcript-backfill.ts`,
 `lib/chat-messages.ts`, `app/session/hooks/use-prompt-actions`, and
 `components/assistant-ui/thread` under the retained `apps/desktop` baseline.
+
+## Stream reconnection after a prolonged interruption
+
+The worker now keeps retrying a lost stream while its conversation owner remains
+alive, with backoff from two seconds to a maximum of 30 seconds. Reconnection
+only resumes and reads the captured conversation; it never resends an uncertain
+user submission. A recovered stream clears its own displayed connection error
+without clearing unrelated errors or a retained uncertain-send warning.
+
+A private loopback WebSocket regression passed through an established session,
+two failed reconnect handshakes and reattachment to the same profile and stored
+session, checking that no prompt is sent. A separate test exercises repeated
+failures, bounded delay, and non-retry of a failed submission; another drives the
+Viewer update path for recovery and retained errors. The exact-source Linux Rust
+suite passed 954 tests with 15 ignored, and `cargo fmt --check` passed.
+
+A follow-up covers opening an existing conversation while the gateway is down:
+transport failures retry with the same profile and session; an explicit RPC
+refusal stops automatic retries and remains visible. The two scenarios passed
+against private loopback sockets, alongside the existing ownership tests. The
+final Linux Rust suite passed 956 tests with 15 ignored, and formatting passed.
+
+Before that follow-up, a Linux native-window run used the pinned real Hermes gateway in a private
+profile and a deterministic local model stub. After a completed first turn, the
+owned gateway was stopped for more than nine seconds and restarted. The same
+stored conversation reattached, its connection error cleared, and a second turn
+completed; each user message appeared once. Evidence, including failed harness
+attempts and process identities, is under `/tmp/herune-reconnect-real-check/`.
+This tests an idle conversation across a gateway restart, not interruption during
+an active generation, a real model provider, or macOS. The pinned legacy
+gateway's profile-unsafe sidebar live-status incompatibility remains open; see
+`capabilities-mac-handoff.md`.
+
+On 2026-11-02 the current `8edb25edd8` source was also built and exercised in a
+Linux native window against the pinned Hermes gateway and a private local model
+stub. The gateway was stopped while the first response was visibly streaming.
+After restart the same conversation retained its partial response, left the
+running state, and completed a second user turn. The first streaming request
+was not resubmitted to the model; both user messages appeared once. The gateway
+process identities exited and its private port closed. The acceptance covers one
+profile and one chat; it does not establish cross-profile recovery, real model
+provider behavior, or macOS acceptance. A previous fixture run held an auxiliary
+model request instead of the main stream and is not used as proof. Compact
+native evidence is retained locally at
+`standalone-desktop-artifacts/reconnect-native-20261102/`.
+
+A later Linux native run disconnected a private TCP relay while the real pinned
+Hermes gateway and synthetic model continued the active turn. The model finished
+while the client was offline; after the relay returned, the same session showed
+the complete reply and accepted a follow-up without resending the first prompt.
+This covers one profile and a short outage, not a gateway restart, real provider
+or macOS. Evidence: `standalone-desktop-artifacts/network-recovery-native-20261102/`.
+
+## Short journal transactions and model selection
+
+A journal state read and an owning send could contend for the same short-lived
+file lock. Previously that contention immediately failed the send with the same
+message used for an active claim by another window. State reads and atomic
+writes now serialize; the separate network-spanning claim remains nonblocking and
+still refuses a second owner. A regression reproduced the state-lock failure
+before the fix. The Linux Rust suite passed 957 tests with 15 ignored, including
+the existing cross-process claim checks; `cargo fmt --check` passed.
+
+In a Linux native-window run against the pinned real Hermes gateway and a private
+local OpenAI-compatible fixture, a custom provider advertised two models. The
+user selected the second model and the fixture received that model in the actual
+prompt request; the response completed. A previous run on the prior executable
+failed with a journal-lock message after selection. The separate regression
+establishes the lock race, but one successful repeat does not prove that race
+was the sole cause of the prior failure. The fixture used no real credentials or
+provider; macOS and other provider workflows remain unverified. Evidence for both
+runs is retained at `standalone-desktop-artifacts/model-switch-native-20261102/`.
+
+On 2026-11-02, two further native Linux runs used the pinned real Hermes gateway
+with a private OpenAI-compatible fixture. In an existing chat, the second user
+turn used the newly selected model and preserved the stored conversation and
+first turn. A second run switched between two configured custom provider routes:
+the second turn reached the second route with its selected model. Both routes
+were distinct paths on one local test server. Each submitted user turn appeared
+once; all known app and gateway processes exited. These checks do not establish
+compatibility with real provider accounts or macOS. Evidence is retained under
+`standalone-desktop-artifacts/model-existing-20261102/` and
+`standalone-desktop-artifacts/provider-switch-native-20261102/`.
+
+## Concurrent ordinary conversations
+
+On 2026-11-02 a Linux native-window run used the pinned real Hermes gateway with
+a private local model stub that held two streaming replies independently. Two
+ordinary sessions on the same profile ran concurrently. Switching between them
+retained their separate drafts; stopping the first left the second stream open,
+and the second then completed with its draft preserved. Both histories were
+reopened without the other conversation's user message. The stopped chat's draft
+was deliberately cleared before pressing Stop because the composer shows Send
+while a draft is present. All known app and gateway processes exited.
+
+This is one source, one profile and a synthetic model provider, not proof of
+cross-profile or real-provider behavior or macOS acceptance. The native evidence
+is at `standalone-desktop-artifacts/parallel-sessions-native-20261102/`.
+
+A subsequent private Linux run against the same pinned Hermes backend held two
+Bot Chat responses in different profiles concurrently. One completed in the
+background while the other kept streaming; switching back retained distinct
+histories and neither prompt was resubmitted. The model was synthetic; real
+providers and macOS remain unverified. Evidence:
+`standalone-desktop-artifacts/parallel-bots-real-20261102/`.
+
+## Native text and image attachments
+
+On 2026-11-02 a Linux native-window test used the actual GTK chooser and pinned
+Hermes gateway in a private home. A text attachment and a PNG were selected in
+successive turns of the same conversation. The gateway-staged files matched the
+selected bytes, the text reached the model fixture, and both replies completed.
+For the non-vision model fixture the PNG was represented to the model as a path
+and an instruction to use `vision_analyze`; the test did not execute that tool
+or establish image understanding. The raw harness check named `model request
+included image` matches that textual hint, not inline image bytes. No real model
+provider or macOS chooser was exercised. Evidence and the PNG hash check are at
+`standalone-desktop-artifacts/attachments-native-20261102/`.
+
+## Unsent drafts after restart
+
+On 2026-11-02 a native Linux test used the pinned Hermes gateway and a private
+local model fixture. Two stored conversations on one source and profile kept
+different unsent drafts after normal Quit and relaunch; switching between the
+conversations restored the correct text and sent neither draft. The executable
+was `b6194456129fa99a3641b047ff2f623bb0483d63aa29d6c7a5b1a1bc8684cbe9`,
+built at `18dd75ac72`; later plugin changes were not in that executable. The
+first attempt failed because the fixture computed the wrong storage filename,
+not because the draft was absent. Crash recovery, draft attachments, other
+sources/profiles and macOS remain untested. Evidence is retained at
+`standalone-desktop-artifacts/draft-restart-20261102/`.
+
+The same first run exposed each GUI-created session twice in the native
+sidebar: the `gui` source was included in both the recents and messaging
+queries. The client now excludes `gui` from messaging in both the batched and
+legacy requests. On the rebuilt Linux executable `9c938fc1999202003100a79f83d3956cfc228f7534d10360400b2e56c02b61db`,
+the same isolated gateway scenario showed each of the two sessions once before
+and after restart while preserving both drafts. A regression test also covers
+equal IDs in separate profiles and Telegram classification. The full Rust
+suite passed 958 tests with 15 ignored. The test fixture, red/green logs and
+limits are at `standalone-desktop-artifacts/sidebar-gui-native-20261102/`.
+
+## Larger chat images (2026-11-02)
+
+The client previously rejected every selected attachment above 5 MiB before
+upload. Images now accept up to 25 MiB through the canonical HTTP upload; a
+legacy gateway that advertises desktop contract v5 or newer also accepts that
+limit through `image.attach_bytes`. At that checkpoint, older or unknown legacy
+gateways and non-image attachments retained the 5 MiB bound. Reads remain bounded even if a
+file changes during staging, and the larger JSON allowance applies only to the
+chat image-upload endpoint.
+
+The 7 MiB canonical upload regression failed before the change and passed
+afterward; modern and unknown legacy versions and 18 worker contracts passed.
+The full Linux test run passed 963 tests with 15 ignored. A Linux native-window
+run used the GTK file chooser, the pinned Hermes gateway and a private test
+model: a 7,684,003-byte PNG was stored by the gateway with the exact original
+SHA-256 and the chat received a reply. The tested binary SHA-256 was
+`f3849a5dae9759ffe5baee0f01f08adb7130c1673d40c12c1064fbe853f18b40`.
+This is one synthetic image and gateway, not proof for all providers or macOS.
+Evidence is in `standalone-desktop-artifacts/large-chat-image-20261102/`.
+
+## Larger chat documents (2026-11-02)
+
+A gateway advertising desktop contract v5 or newer now also accepts non-image
+chat attachments up to 25 MiB through the existing `file.attach` RPC. The prior
+5 MiB bound remains for gateways with older or unknown contracts. A focused
+regression demonstrated the former 5 MiB rejection and now verifies exact
+bytes and the message reference for a modern gateway, plus refusal before a
+large frame is sent to an unknown gateway. All 19 worker contracts and the
+common Linux suite (964 passed, 15 ignored) passed.
+
+A Linux native-window run selected a 7,340,548-byte PDF using the real GTK
+chooser and sent it through the pinned Hermes gateway to a private model
+fixture. The gateway stored the exact source bytes and the model request
+contained the document reference. The tested binary SHA-256 was
+`2d0bb81f5215894569a6c203131b4fe2d819d3f4dea6515777b7c4783d3b9e01`.
+This does not prove macOS or real-provider behavior. Evidence is in
+`standalone-desktop-artifacts/large-chat-document-20261102/`.
+
+## Preserve drafts when an attachment is too large (2026-11-02)
+
+The universal 25 MiB attachment limit is now checked before creating a saved
+send or clearing the composer. A larger selected file leaves the original text
+and attachment in the editor, with an error so the user can remove the file.
+A regression in an isolated child process reproduced the previous empty
+composer and now verifies retained text, removable attachment and no saved
+send. Worker-side validation still handles changed files and lower limits on
+older gateways; those later failures retain the existing saved-send recovery.
+
+The Linux common suite passed 965 tests with 15 ignored. A native Linux run
+using the GTK chooser and pinned Hermes gateway selected an oversized file,
+confirmed no model request, removed it, then submitted the unchanged text to a
+private model fixture and received a reply. The binary SHA-256 was
+`4530ebb9678b1312be0a471675d26c4a9affc9286f30be0e42b7eb1f4ec0b801`.
+This does not establish macOS or real-provider behavior. Evidence is in
+`standalone-desktop-artifacts/oversize-draft-20261102/`.
+
+A later fix also covers a lower limit discovered only after connecting. Drafts
+with files remain in their captured editor until staging succeeds; completion
+clears them only if the text and attachments are unchanged. A local preflight
+refusal precedes rewinds, policy changes and uploads and leaves the saved send
+for explicit discard, so a missing or oversized file can be removed without
+losing the message. The editor is not rebound to a new lazy session before a
+rejection. Unknown network outcomes retain the saved-send recovery behavior.
+
+Linux native tests used pinned Hermes with a synthetic local model. A test-only
+v4 contract override rejected a 6 MiB file while retaining the draft; after
+explicit discard and file removal the text was sent in both a new ordinary chat
+and a new Bot Chat. An unmodified v8 gateway accepted a 6 MiB file byte-for-byte.
+The final source suite passed 970 tests, with 15 ignored. These checks do not
+establish macOS or real-provider behavior. Evidence:
+`standalone-desktop-artifacts/attachment-draft-preflight-20261102/`.
+
+A legacy new-chat send interrupted during its first attachment upload can now be
+retried when the same profile's resumed runtime is proven empty and idle. If
+agent initialization is still starting, the worker waits briefly for that proof;
+otherwise it retains the normal history check. Previously attempted sends never
+use this shortcut. Linux native verification cut the first upload before the
+pinned Hermes gateway, then retried through the UI: the file bytes and text
+arrived, one user message was stored, and the synthetic local model replied.
+This does not establish macOS or real-provider behavior. Evidence:
+`standalone-desktop-artifacts/attachment-retry-native-20261102/`.
+
+A follow-up fences this recovery before the journal is rewritten: if a newly
+created legacy chat is resumed as a different stored ID before the first send,
+the original saved input remains intact and no upload or prompt is issued.
+Snapshots that explicitly identify another profile are refused; an omitted
+profile remains compatible with older gateways. Existing chats can still follow
+server-resolved compression continuations. Private socket and parser tests
+cover the owner refusal; they do not establish malicious-server or macOS behavior.
+
+### Legacy image retry after a lost acknowledgement (2026-11-02)
+
+With Hermes desktop contract v2 or newer, image bytes are first staged as a file and
+its path is retained with the saved send. Before attaching on each attempt the
+same path is detached, so a lost image-attach acknowledgement does not queue a
+second copy. Discard also detaches known paths on the captured runtime before
+retiring the journal; an unconfirmed cleanup or changed runtime preserves it.
+A first send to a confirmed empty lazy session can proceed after discard. Unknown or v1
+legacy contracts retain their original upload behavior and do not get this retry
+guarantee.
+
+An isolated native Linux run against pinned Hermes cut the first successful
+image-attach response. Before the fix the synthetic model received two image
+references; afterward it received one with the original file bytes. A separate
+native run discarded the send and then submitted text without the image.
+This is not a real-provider or macOS acceptance claim. Evidence:
+`standalone-desktop-artifacts/image-retry-native-20261102/`.
+
+On 2026-11-02 the same safe retry was extended to contracts v2–v7: the
+retained Hermes v2 source exposes `file.attach`, `image.attach`, and
+`image.detach`, and the v5 source retains the same contract. Socket tests cover
+v2, v5 and v8, as well as the unchanged v1/unknown direct-upload behavior. A
+Linux native run used pinned v8 Hermes with its reported contract changed to v2
+by a private test relay; it is not an actual v2-server or macOS acceptance.
+Evidence: `standalone-desktop-artifacts/image-retry-v2-20261102/`.
+
+### Model choice while two chats are active (2026-11-02)
+
+A Linux native-window check used the pinned Hermes gateway and a private
+synthetic model endpoint with two models. Two stored conversations streamed in
+parallel. While the first was running, the user selected the second model,
+switched to the other conversation and back, then sent the next message. It
+reached the second model; the other conversation remained on the first model.
+Another run queued the next message before the first stream finished and saw
+the same result while the second conversation continued. Each relevant model
+request occurred once. The first fixture attempt missed composer focus; it was
+corrected and rerun. No client code changed. This is not real-provider or macOS
+acceptance. Evidence: `standalone-desktop-artifacts/parallel-model-choice-20261102/`.
+
+### Unsent files across restart (2026-11-02)
+
+A private Linux native-window test created two stored conversations against the
+pinned Hermes backend, attached a different text file to each draft through the
+GTK chooser, then quit and restarted Herune. Both drafts and the right attachment
+reappeared in their own conversation without being sent during restart. Sending
+each afterward delivered its exact file bytes and text once to a synthetic model;
+the other conversation's file was absent from each request. The actual backend
+and UI were used, with model completion stubbed. This covers a normal restart,
+not a crash, missing source files, macOS or another provider. The executable
+was `4f1205aed8e64b73b78e44f697d79e630df943016544341831406691d7546a70`, built
+from the source preceding `fd931b1a92` with its same client changes. Evidence:
+`standalone-desktop-artifacts/draft-attachments-native-20261102/`.
+
+### Clipboard screenshots (2026-11-02)
+
+Image paste into the native composer is missing. A Linux native-window run
+confirmed that a real image was present on a private GTK clipboard, but pasting
+into the focused composer produced no attachment; the existing text remained.
+This is an open everyday workflow, not a macOS result. Rune's clipboard hooks
+can carry image content, but the composer has no such hook. Persisting pasted
+images must preserve the captured editor and its draft across restarts. The
+shared composer view requires coordination with the Mac lane. Evidence:
+`standalone-desktop-artifacts/clipboard-image-native-20261102/REPORT.md`.
+
+### Search in older conversation history (2026-11-02)
+
+When a search has no loaded match, Enter requests earlier history. Previous-match
+navigation at the first loaded hit also checks earlier pages. Pages are fetched
+sequentially for the captured conversation and query, stopping on a match,
+error, cancellation or the end of history. Each action reads at most eight
+pages; another action continues from the loaded boundary. The existing search
+interface is unchanged. After a prepend, the client waits for layout before
+scrolling to and highlighting the hit.
+
+A private Linux native-window check used the pinned Hermes backend and a seeded
+521-message conversation. The old executable could not find a phrase outside
+its latest 500 messages; the new executable loaded and visibly highlighted it
+without sending a prompt. The first new-executable run loaded the page but
+failed to reveal the virtual row; the corrected run passed. A mounted Runtime
+regression exercises that transition, and controller tests cover a multi-page
+scan, source/query retirement, error handling and the page bound. The final
+Rust suite passed 997 tests, with 15 ignored. This does not establish macOS
+acceptance or search in messages beyond the per-action bound without repeating
+the action. Evidence: `standalone-desktop-artifacts/history-search-native-20261102/`.
+
+### Larger images in edited turns (2026-11-02)
+
+Editing a message with a previously sent image no longer rejects it solely for
+exceeding 5 MiB. Images are frozen before the history changes and replayed via
+the existing image-upload endpoint, up to the client's 25 MiB image limit;
+non-image replay retains its 5 MiB limit. The existing 64 MiB total frozen
+budget is enforced as each attachment is saved.
+
+A synthetic authenticated gateway test reads a 7 MiB stored image from the
+captured profile and session, verifies the exact upload, and exercises the
+subsequent edit and submission. The former 5 MiB rejection was reproduced first.
+The agent's read-data-url limit can still prevent recovery of larger remote
+files; this test does not establish every gateway version, real-model behavior,
+or macOS acceptance. Clipboard image paste remains a separate open feature.
+
+For a stored image whose data-URL read returns HTTP 413, replay now retries the
+same profile/session-owned path through the authenticated file-download route.
+Only a complete HTTP 200 response with a verified length of at most 25 MiB and
+a recognized image signature is accepted; a refusal, partial response or
+invalid body leaves history unchanged. Other read failures do not trigger this
+fallback. A synthetic gateway exercised the full 17 MiB edit and exact upload;
+partial, oversized, unknown-length and invalid-image responses were rejected.
+An isolated invocation of pinned Hermes itself confirmed upload 200, data-URL
+read 413 and byte-exact download 200 for a 17 MiB image with an isolated stored
+session. These checks do not establish real-provider, locked-hosted-server or
+macOS acceptance.
+
+### Incomplete replay during an active stream (2026-11-02)
+
+When a live event exposes a sequence gap, the worker now validates the entire
+replay's epoch and contiguous sequence before publishing any replayed events.
+An incomplete replay triggers a fresh session/history read instead of silently
+skipping a missing chunk. A complete replay is ordered and deduplicated before
+the live event; it does not resend the prompt.
+
+Authenticated loopback contracts reproduced the old missing-sequence failure,
+then checked fallback and ordered replay without a mutation. The full Linux
+Rust suite passed 1009 tests with 15 ignored. This is synthetic transport
+evidence; macOS and real-provider behavior were not tested by this increment.
+
+If a newly received completion is already present in the replay response, the
+worker now delivers the original live event once, so completion handling and
+notifications are not mistaken for historical replay, and then refreshes the
+stored history. A later completion included in the replay also triggers that
+refresh. An authenticated loopback regression covers both orders and confirms
+that the live event is not duplicated; it does not establish native or
+real-provider acceptance. The first unrestricted common run had an unrelated
+220 ms cloud deadline assertion fail; that test passed in isolation and the
+full retry passed with four test threads (1010 passed, 15 ignored).
+
+### Sidebar search across stored conversations (2026-11-02)
+
+The existing sidebar search also asks each visible, selected source for
+`/api/sessions/search`, scoped to that sidebar's owner profile. Matching old
+sessions are projected into the existing list while the query is present; local
+rows are restored after clearing it. The query is debounced, and page-network
+request identity, source stamps and profile checks fence late or foreign results.
+Hidden profile filters prevent dispatch to excluded profiles. A failed or missing
+endpoint leaves local filtering in place and reports that full-history search is
+unavailable. Refresh retries it.
+
+A loopback authenticated HTTP test verified the request, a Unicode query and
+profile scope; state tests cover stale and foreign results, refresh and clearing;
+a mounted Rune Runtime test verified a returned row in the existing sidebar.
+The exact-source Linux Rust suite passed 1,026 tests with 16 ignored. The standard
+`npm run test:rune` passed before the final notice and profile-filter changes;
+the final exact-source run used the restored, unchanged SDK assets.
+
+That initial checkpoint did not establish native full-app search, macOS
+acceptance, or multi-profile search within one source. Gateways without the
+search endpoint continue to search only currently loaded rows.
+
+The follow-up searches each visible selected profile separately, preserving source,
+profile and NativeSelf ownership even when sessions share an ID. An unavailable
+profile does not erase successful results from the others. Root-owned search
+results can be opened with their captured authority; their context actions are
+not yet enabled. The app currently does not separately query a root and Backend
+profile when both have the same displayed name.
+
+A Linux native-window test used the actual pinned Hermes gateway with a private
+database containing 65 newer conversations and one older conversation. The
+older conversation was initially outside the loaded list; searching its message
+text found and opened it without sending a model prompt. Evidence is in
+`standalone-desktop-artifacts/sidebar-search-native-20261102/result.json`;
+the tested app SHA-256 was
+`ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`.
+A separate in-process route test exercised real Hermes SQLite searches with
+injected profile routing. The standard test command and a repeat against the
+restored host assets each passed 1,031 tests, with 16 ignored. This does not
+establish native multi-profile or macOS acceptance, nor project-overview search
+results.
+
+For a root-owned sidebar row, Herune now retains the running state of its own
+matching conversation worker using the captured profile intent as well as the
+profile and session ID. A regression checks that a named profile with the same
+name and ID does not inherit that state and that a stale connection epoch clears
+it. The standard and exact-source Rust suites each passed 1,032 tests, with 16
+ignored. This does not add owner identity to an older gateway's process-wide live
+list or establish macOS acceptance.
+
+A further native Linux run tested title-only search against the same pinned
+Hermes gateway. A conversation titled `Mercury Quarterly Planning` was older
+than 65 other conversations, and its title word was absent from the message.
+Typing `Mercury` found and opened that conversation without sending a model
+prompt. The tested binary was `ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`,
+built before the separate retained-running status change. Evidence:
+`standalone-desktop-artifacts/sidebar-title-native-20261102/result.json`.
+This checks one profile and does not establish macOS or project-overview behavior.
+
+### Clipboard image staging (2026-11-02, integration pending)
+
+`client::clipboard_image` prepares a pasted PNG in private client state using a
+unique name and the existing atomic private writer. It rejects images above the
+client's 25 MiB attachment ceiling before writing. The draft keeps a normal file
+path, so the staged file must remain available while the draft or a retained send
+can still refer to it. Tests check byte preservation, distinct names and Unix
+permissions. The standard Rust suite passed 1,034 tests with 16 ignored; its
+pretest regenerated host assets, which were restored after the run. The two
+focused staging tests passed separately against the original assets. This helper
+is not yet connected to a composer paste hook.
+
+The view integration must capture the editor and `DraftScope` at paste time,
+validate ownership again after any background write, attach only to that draft,
+and preserve normal text paste. A write whose owner is retired before attachment
+must release only the just-created file. Once attached, cleanup requires proving
+that no persisted draft or send journal refers to the file, including across
+windows; no broad directory cleanup is implemented. The shared composer view is
+owned by the Mac lane and still requires coordination and native acceptance.
+
+### Native search across two profiles (2026-11-02)
+
+A Linux native-window run used the pinned real Hermes gateway and two isolated
+profiles. Each profile had 65 newer conversations and an older conversation
+with the same stored ID; their message content identified the owner. Searching
+for text shared by both found both old rows, and opening each loaded the correct
+profile's history. No model prompt was sent. The executable SHA-256 was
+`ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`;
+this is the previous search build, before the later root-running status and
+clipboard staging changes. Evidence:
+`standalone-desktop-artifacts/sidebar-multiprofile-native-20261102/result.json`.
+The run covers two profiles on one source, not multiple gateways, NativeSelf,
+project-overview behavior or macOS.
+
+### Attachment drafts after an application crash (2026-11-02)
+
+A Linux native run against the pinned Hermes gateway prepared two stored chats,
+then saved a different unsent text and chosen local file in each draft. After
+confirming both entries had reached the private draft store, the test terminated
+only its own Herune process with SIGKILL. A new process restored the right text
+and attachment in each chat without submitting either. Both were then sent, and
+the gateway stored the matching file bytes. The gateway used a synthetic local
+model; no real provider was contacted.
+
+The tested executable SHA-256 was
+`ae6692000d3faa590bfa622ad77e8b3238db9b528291e1e2e1fc22a38ebfffcd`.
+Evidence: `standalone-desktop-artifacts/draft-attachments-crash-20261102/result.json`.
+This demonstrates recovery after the drafts were persisted, not a crash before
+the debounce or write completed; it does not cover pasted images or macOS.

@@ -114,7 +114,12 @@ mod tests {
             assert_eq!(url.path(), "/prefix/api/audio/voice-live/status");
             let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
             assert_eq!(params.get("profile").unwrap(), "work");
-            assert_eq!(params.get("token").unwrap(), "synthetic voice token");
+            assert!(!params.contains_key("token"));
+            assert!(
+                header
+                    .to_ascii_lowercase()
+                    .contains("x-hermes-session-token: synthetic voice token\r\n")
+            );
             http_answer(
                 &mut http,
                 json!({"ok":true,"mode":"chained","available":true,"api_key":"discarded synthetic key"}),

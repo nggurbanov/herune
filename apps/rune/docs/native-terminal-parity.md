@@ -73,3 +73,28 @@ used: SSH argument construction, quoting and source selection are covered by
 synthetic tests. macOS PTYs, Windows ConPTY/PowerShell and actual SSH host/device
 acceptance remain unverified in this Linux environment. The native code uses
 portable-pty and OpenSSH rather than agent installation or lifecycle commands.
+
+## Webapp host-terminal ticket compatibility (2026-11-02)
+
+Current Hermes Webapp requires a socket-specific one-use ticket for
+`/api/host-terminal`; a standing session token alone receives HTTP 403. On a
+rejected non-native upgrade, the client now asks the same captured gateway and
+profile for a host-terminal ticket, then retries that rejected upgrade without
+the standing token in the WebSocket URL. Each open, reconnect and close dial
+gets its own ticket. Older gateways that accept the original connection keep
+using it. A rejected ticket request does not fall back to a shell on another
+host.
+
+The focused ticket regression failed before the change and passed after it;
+the 12 existing terminal tests and the Linux common suite (966 passed, 15
+ignored) also passed. A Linux native-window run used the pinned Hermes backend
+with its actual Webapp terminal lifespan enabled in an isolated fixture. The
+remote terminal opened, executed `pwd` in the selected project directory, and
+closed with its owning receipt. The tested binary SHA-256 was
+`6e39a767ab7a847ad9bcfc8caf9a70761828ce83d88bd3a8373e56145a8c436b`.
+This is not a full Webapp deployment, SSH, macOS or real-provider acceptance.
+
+The pinned headless `hermes serve` surface does not offer host-terminal tickets
+or shells; its rejection remains visible and no local shell is substituted.
+Evidence, including intermediate fixture failures, is retained under
+`standalone-desktop-artifacts/terminal-webapp-ticket-20261102/`.

@@ -486,3 +486,56 @@ async fn private_plugin_timeout_is_reported_as_failed_delivery() {
         "no automatic native delivery retry"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parked_approval_native_click_preserves_origin_and_has_no_direct_actions() {
+    let bus = Bus::new();
+    let (daemon, state) = server(&bus, true, 0).await;
+    let h = Harness::new(&bus).await;
+    let mut notifications = Notifications::new();
+    notifications.client = 38;
+    notifications.started = true;
+    notifications.test_service = Some(h.sender.clone());
+    notifications.bind_connection("foreground-source".into());
+    h.sender
+        .send(Command::Register {
+            client: 38,
+            replies: notifications.sender.clone(),
+            waker: None,
+            primary: false,
+            alive: Arc::downgrade(&notifications.alive),
+        })
+        .await
+        .unwrap();
+    let current = crate::composer::DraftScope {
+        connection: 9,
+        profile: "default".into(),
+        session: Some("same".into()),
+        draft_origin: None,
+        profile_intent: crate::source::ProfileIntent::Backend,
+    };
+    let parked = crate::composer::DraftScope {
+        connection: 8,
+        ..current.clone()
+    };
+    notifications.set_active(current);
+    notifications.event_from_source("parked-source", &parked, "approval.request", &serde_json::json!({"prompt_id":"prompt-a","execution_generation":3,"choices":["once","deny"],"command":"fixture"}), "runtime-a", false, "Chat A", false);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while state.seen.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    assert_eq!(state.seen.lock().unwrap()[0].actions, ["default", "View"]);
+    signal(&daemon, 1, "default").await;
+    let activation = loop {
+        let actions = notifications.poll();
+        if let Some(action) = actions.into_iter().next() {
+            break action;
+        }
+        assert!(Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    };
+    assert_eq!(activation.principal, "parked-source");
+    assert_eq!(activation.scope, parked);
+    assert!(activation.action.is_none());
+}

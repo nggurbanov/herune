@@ -123,6 +123,37 @@ impl OwnedProcess {
         }
         posix::exited(&self.child)
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn take_pipes(
+        &mut self,
+    ) -> Result<
+        (
+            std::process::ChildStdout,
+            std::process::ChildStderr,
+            std::process::ChildStdin,
+        ),
+        String,
+    > {
+        if self.reaped.is_some() {
+            return Err("SSH inventory was cancelled or timed out".into());
+        }
+        let stdout = self
+            .child
+            .stdout
+            .take()
+            .ok_or("SSH inventory stdout is unavailable")?;
+        let stderr = self
+            .child
+            .stderr
+            .take()
+            .ok_or("SSH inventory stderr is unavailable")?;
+        let stdin = self
+            .child
+            .stdin
+            .take()
+            .ok_or("SSH inventory stdin is unavailable")?;
+        Ok((stdout, stderr, stdin))
+    }
     fn stop(&mut self) -> std::io::Result<std::process::ExitStatus> {
         if let Some(status) = self.reaped {
             return Ok(status);
@@ -242,14 +273,7 @@ fn read_posix(
         return Err("SSH inventory was cancelled or timed out".into());
     }
     let owned = children.spawn(command, &cancelled)?;
-    let (mut stdout, mut stderr, stdin) = {
-        let mut owned = owned.child.lock().unwrap();
-        (
-            owned.child.stdout.take().expect("piped inventory stdout"),
-            owned.child.stderr.take().expect("piped inventory stderr"),
-            owned.child.stdin.take().expect("piped inventory stdin"),
-        )
-    };
+    let (mut stdout, mut stderr, stdin) = owned.child.lock().unwrap().take_pipes()?;
     posix::nonblocking(&stdout)
         .and_then(|_| posix::nonblocking(&stderr))
         .and_then(|_| posix::nonblocking(&stdin))
@@ -482,6 +506,24 @@ pub(crate) fn parse(bytes: &[u8]) -> Result<Inventory, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn shutdown_before_inventory_pipe_acquisition_returns_cancelled() {
+        let children = Arc::new(Children::default());
+        let mut command = Command::new("sh");
+        command
+            .arg("-c")
+            .arg("while :; do :; done")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let registered = children.spawn(command, &AtomicBool::new(false)).unwrap();
+        children.shutdown();
+        let result = registered.child.lock().unwrap().take_pipes();
+        assert!(matches!(result, Err(ref error) if error.contains("cancelled")));
+        drop(registered);
+        assert!(children.is_empty());
+    }
     #[test]
     fn inventory_requires_proof_and_never_reinterprets_gateway_path_as_home() {
         assert!(parse(b"connection refused").is_err());

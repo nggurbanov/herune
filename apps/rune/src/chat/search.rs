@@ -15,7 +15,16 @@ pub struct SearchView {
     pub input: TextEdit,
     pub search: Search,
     pub pending: Option<PendingReveal>,
+    pub history_scan: Option<HistoryScan>,
     pub revision: u64,
+}
+
+#[derive(Clone)]
+pub struct HistoryScan {
+    pub query: String,
+    pub cursor: usize,
+    pub remaining_pages: u8,
+    pub anchor: Option<Match>,
 }
 
 #[derive(Clone)]
@@ -25,6 +34,7 @@ pub struct PendingReveal {
     pub current: Match,
     pub revision: u64,
     pub mounted_frame: bool,
+    pub wait_layout: bool,
 }
 
 /// The caller supplies its complete, typed surface identity.
@@ -46,6 +56,7 @@ impl<Owner: Eq + Hash> Searches<Owner> {
     pub fn retire_pending(&mut self) {
         for view in self.views.values_mut() {
             view.pending = None;
+            view.history_scan = None;
         }
     }
     pub fn remove(&mut self, owner: &Owner) {

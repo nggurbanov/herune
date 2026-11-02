@@ -145,3 +145,261 @@ fn parked_selected_route_restores_only_its_captured_profile_intent() {
         "selected input"
     );
 }
+
+#[test]
+fn parked_running_status_is_shown_only_on_its_retained_source_and_profile() {
+    use crate::{sidebar::Status, sidebar::fleet::SourceSidebar};
+    let root = std::env::temp_dir().join(format!("herune-parked-status-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut s = viewer();
+    s.selected_session = Some("same".into());
+    let a_scope = s.composer_scope();
+    s.conversation
+        .fixture(a_scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    let a_binding = s.current_source_binding().unwrap();
+    let a_key = a_binding.stamp().key();
+    let mut a = SourceSidebar::new_at(
+        a_binding,
+        windows::source_epoch(),
+        "default".into(),
+        std::sync::Arc::new(|| {}),
+        root.join("a"),
+    )
+    .unwrap();
+    a.state_mut().apply("sidebar.recents", Ok(serde_json::json!({"sessions":[{"id":"same","profile":"default","message_count":1},{"id":"same","profile":"other","message_count":1}]})));
+    let a_default = a.state().recents.rows[0].clone();
+    let a_other = a.state().recents.rows[1].clone();
+    s.fleet_state.partitions.insert(a_key.clone(), a);
+    switch(&mut s, "b");
+    let b_binding = s.current_source_binding().unwrap();
+    let b_key = b_binding.stamp().key();
+    let mut b = SourceSidebar::new_at(
+        b_binding,
+        windows::source_epoch(),
+        "default".into(),
+        std::sync::Arc::new(|| {}),
+        root.join("b"),
+    )
+    .unwrap();
+    b.state_mut().apply(
+        "sidebar.recents",
+        Ok(serde_json::json!({"sessions":[{"id":"same","profile":"default","message_count":1}]})),
+    );
+    let b_default = b.state().recents.rows[0].clone();
+    s.fleet_state.partitions.insert(b_key.clone(), b);
+    s.poll_conversations();
+    let a = s.fleet_state.partitions.get(&a_key).unwrap().state();
+    assert!(a.status(&a_default) == Status::Working);
+    assert!(a.status(&a_other) == Status::Idle);
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&b_key)
+            .unwrap()
+            .state()
+            .status(&b_default)
+            == Status::Idle
+    );
+    s.conversation
+        .fixture(a_scope.clone(), &serde_json::json!({"running":false}))
+        .unwrap();
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Idle
+    );
+    s.conversation
+        .fixture(a_scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Working
+    );
+    s.conversation
+        .fixture_queue_failure(a_scope.clone(), "stream disconnected", true, None);
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Idle
+    );
+    s.conversation
+        .fixture(a_scope, &serde_json::json!({"running":true}))
+        .unwrap();
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Working
+    );
+    s.fleet_state.workspaces.remove(&a_key);
+    s.poll_conversations();
+    assert!(
+        s.fleet_state
+            .partitions
+            .get(&a_key)
+            .unwrap()
+            .state()
+            .status(&a_default)
+            == Status::Idle
+    );
+    drop(s);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn parked_approval_binding_requires_live_exact_source_and_runtime() {
+    let mut s = viewer();
+    s.selected_session = Some("same".into());
+    let scope = s.composer_scope();
+    s.conversation
+        .fixture(scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    let source = s.current_source_binding().unwrap().stamp().clone();
+    switch(&mut s, "b");
+    assert_eq!(
+        s.parked_notice_binding(&scope, "same").unwrap().stamp(),
+        &source
+    );
+    assert!(s.parked_notice_binding(&scope, "wrong-runtime").is_none());
+    let mut wrong = scope.clone();
+    wrong.connection += 1000;
+    assert!(s.parked_notice_binding(&wrong, "same").is_none());
+    let mut native = scope.clone();
+    native.profile_intent = crate::source::ProfileIntent::NativeSelf;
+    assert!(s.parked_notice_binding(&native, "same").is_none());
+    s.conversation
+        .fixture_queue_failure(scope.clone(), "stream lost", true, None);
+    s.poll_conversations();
+    assert!(s.parked_notice_binding(&scope, "same").is_none());
+    s.conversation
+        .fixture(scope.clone(), &serde_json::json!({"running":true}))
+        .unwrap();
+    s.retired_profiles
+        .insert((scope.connection, scope.profile.clone()));
+    assert!(s.parked_notice_binding(&scope, "same").is_none());
+}
+
+#[test]
+fn server_search_hit_renders_in_existing_sidebar() {
+    use rune::{Env, Runtime};
+    let mut s = viewer();
+    s.sidebar_state.bind_connection_at(
+        s.connection.as_ref().unwrap(),
+        s.connection_epoch,
+        std::env::temp_dir(),
+    );
+    s.sidebar_state.prefs.grouping = crate::sidebar::Grouping::None;
+    s.sidebar_state.prefs.collapsed.clear();
+    s.search.replace_text("needle");
+    s.sidebar_state.search_tick("needle", 1.0, false);
+    s.sidebar_state.search_tick("needle", 1.3, false);
+    s.sidebar_state.apply("sidebar.search", Ok(serde_json::json!({"results":[{"id":"old","session_id":"old","profile":"default","title":"Older conversation","started_at":1,"last_active":1,"message_count":3}]})));
+    let row = s
+        .sidebar_state
+        .recents
+        .rows
+        .iter()
+        .find(|row| row.id == "old")
+        .unwrap();
+    let key = format!("session-{}", row.key());
+    let mut runtime = Runtime::new(s, crate::view::app, (1200., 800.), Env::new(true, 1.));
+    runtime.frame(1.0);
+    assert!(
+        runtime.find(&key).is_some(),
+        "server hit should be visible in the existing sidebar"
+    );
+}
+
+#[test]
+fn root_owned_search_result_opens_with_root_intent_and_does_not_mutate_a_named_profile() {
+    use crate::gateway::{
+        BackendRootProof,
+        prepared::{BackendTarget, SelectedContext, WirePolicy},
+        route,
+    };
+    use crate::source::ProfileIntent;
+    let policy = route::ProfilePolicy::new("default", route::RouteOptions::default()).unwrap();
+    let policy = WirePolicy::token(policy, Default::default())
+        .unwrap()
+        .with_selected(
+            SelectedContext::new(
+                "default",
+                BackendTarget::Root(BackendRootProof {
+                    profile: None,
+                    profile_id: "/private/root".into(),
+                    instance_id: "fixture-instance".into(),
+                    authority_epoch: 7,
+                }),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let connection = Connection::Routed {
+        actual: Box::new(connection("root")),
+        policy: std::sync::Arc::new(policy),
+        owner: std::sync::Arc::new(crate::source::RouteOwner::legacy("search-root-test").unwrap()),
+    };
+    let actor = crate::connections::TestLegacyRig::new();
+    let lease = crate::connections::TestRoutedLease::new(connection.clone());
+    let mut s = viewer();
+    s.connection = Some(connection);
+    s.retain_window_route(actor.resolver(), lease.lease.clone());
+    let binding = s.current_source_binding().unwrap();
+    s.sidebar_state
+        .bind_source_at(&binding, s.connection_epoch, std::env::temp_dir())
+        .unwrap();
+    s.profile_intent = ProfileIntent::NativeSelf;
+    let targets = vec![("default".to_owned(), true)];
+    s.sidebar_state
+        .search_profiles_tick("needle", 1.0, targets.clone());
+    let (_, _, effects) = s.sidebar_state.search_profiles_tick("needle", 1.3, targets);
+    s.sidebar_state.apply(&effects[0].0, Ok(serde_json::json!({"results":[{"id":"root-result","session_id":"root-result","profile":"default","title":"Root result","started_at":1,"last_active":1,"message_count":3}]})));
+    let row = s
+        .sidebar_state
+        .recents
+        .rows
+        .iter()
+        .find(|row| row.id == "root-result")
+        .unwrap();
+    let owner = row.owner().unwrap();
+    assert_eq!(owner.profile_intent, ProfileIntent::NativeSelf);
+    s.sidebar_action_owned(
+        owner.clone(),
+        crate::sidebar::Action::Pin("default".into(), "root-result".into(), true),
+    );
+    assert!(s.sidebar_state.mutation.is_none());
+    assert!(
+        s.sidebar_state
+            .notice
+            .as_deref()
+            .unwrap()
+            .contains("Open this local conversation")
+    );
+    s.sidebar_action_owned(
+        owner,
+        crate::sidebar::Action::Open("default".into(), "root-result".into()),
+    );
+    assert_eq!(s.selected_session.as_deref(), Some("root-result"));
+    assert_eq!(s.profile_intent, ProfileIntent::NativeSelf);
+}

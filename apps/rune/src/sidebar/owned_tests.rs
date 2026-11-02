@@ -280,3 +280,31 @@ fn recovery_cannot_resurrect_an_edit_already_confirmed_by_another_window() {
     );
     assert!(root.state(&endpoint, 73).mutation.is_none());
 }
+
+#[test]
+fn retained_live_status_keeps_native_root_and_named_profile_distinct() {
+    use crate::{composer::DraftScope, source::ProfileIntent};
+    let root = Workspace::new();
+    let mut state = root.state(&connection("live"), 31);
+    state.apply(
+        "sidebar.recents",
+        Ok(json!({"sessions":[{"id":"same","profile":"research","message_count":1}]})),
+    );
+    let backend = state.recents.rows[0].clone();
+    let mut native = backend.clone();
+    native.profile_intent = ProfileIntent::NativeSelf;
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 31,
+        profile: "research".into(),
+        profile_intent: ProfileIntent::NativeSelf,
+        session: Some("same".into()),
+    };
+    assert!(state.set_retained_running(Some(31), &[scope.clone()]));
+    assert!(state.status(&native) == Status::Working);
+    assert!(state.status(&backend) == Status::Idle);
+    let mut wrong_epoch = scope;
+    wrong_epoch.connection = 32;
+    assert!(state.set_retained_running(Some(31), &[wrong_epoch]));
+    assert!(state.status(&native) == Status::Idle);
+}

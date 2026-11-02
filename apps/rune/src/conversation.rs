@@ -138,6 +138,7 @@ pub struct ConversationView {
     pub workspace_pending: bool,
     pub workspace_uncertain: bool,
     pub error: Option<String>,
+    stream_error: Option<String>,
     pub uncertain: Option<String>,
     pub model_confirmation: Option<ModelConfirmation>,
     pub canonical_bot: bool,
@@ -181,6 +182,10 @@ pub enum Update {
     StreamOpened {
         scope: DraftScope,
     },
+    StreamRecovered {
+        scope: DraftScope,
+        error: String,
+    },
     NoticeEvent {
         scope: DraftScope,
         kind: String,
@@ -208,6 +213,15 @@ pub enum Update {
         policy_stamp: Option<PolicyStamp>,
         policy_fields: PolicyFields,
     },
+    AttachmentsReady {
+        scope: DraftScope,
+        submission_id: String,
+    },
+    InputRejected {
+        scope: DraftScope,
+        submission_id: String,
+        message: String,
+    },
     Failed {
         scope: DraftScope,
         message: String,
@@ -230,6 +244,12 @@ impl Default for Conversation {
         Self::new()
     }
 }
+impl ConversationView {
+    pub(crate) fn stream_observed(&self) -> bool {
+        self.stream_error.is_none()
+    }
+}
+
 impl Conversation {
     pub fn new() -> Self {
         let (replies, receive) = mpsc::channel();
@@ -252,6 +272,100 @@ impl Conversation {
             .get(scope)
             .cloned()
             .unwrap_or_else(|| scope.clone())
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_history_reader(
+        &mut self,
+        scope: &DraftScope,
+        messages: Vec<HistoryMessage>,
+        cursor: usize,
+    ) -> std::sync::mpsc::Receiver<(String, usize)> {
+        let (send, receive) = std::sync::mpsc::channel();
+        let (observed, requests) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(command) = receive.recv() {
+                if let worker::Command::Older { stored, cursor } = command {
+                    let _ = observed.send((stored, cursor));
+                }
+            }
+        });
+        self.workers.insert(scope.clone(), send);
+        self.views.insert(
+            scope.clone(),
+            ConversationView {
+                stored: scope.session.clone().unwrap(),
+                messages,
+                truncated: true,
+                history_cursor: cursor,
+                ..Default::default()
+            },
+        );
+        requests
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_history_reply(
+        &self,
+        scope: &DraftScope,
+        cursor: usize,
+        result: Result<crate::gateway::History, String>,
+    ) {
+        self.replies
+            .send(worker::Reply::Older {
+                origin: scope.clone(),
+                cursor,
+                result: result.map_err(Into::into),
+            })
+            .unwrap();
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_attachments_ready(&self, origin: DraftScope, id: &str) {
+        self.replies
+            .send(worker::Reply::AttachmentsReady {
+                origin,
+                id: id.into(),
+            })
+            .unwrap();
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_queue_failure(
+        &self,
+        origin: DraftScope,
+        message: &str,
+        stream_loss: bool,
+        id: Option<String>,
+    ) {
+        self.replies
+            .send(worker::Reply::Failed {
+                origin,
+                id,
+                message: message.into(),
+                uncertain: !stream_loss,
+                stream_loss,
+            })
+            .unwrap();
+    }
+    #[cfg(test)]
+    pub(crate) fn fixture_queue_recovered(&self, origin: DraftScope) {
+        let session = origin.session.clone().unwrap();
+        let snapshot = crate::gateway::conversation::Snapshot {
+            metadata: serde_json::json!({}),
+            runtime: session.clone(),
+            stored: session,
+            canonical: true,
+            revision: 1,
+            generation: 1,
+            authority: 1,
+            running: true,
+            epoch: "fixture".into(),
+            sequence: 0,
+            prompts: vec![],
+            pending: vec![],
+            info: serde_json::json!({}),
+            messages: vec![],
+        };
+        self.replies
+            .send(worker::Reply::Recovered { origin, snapshot })
+            .unwrap();
     }
     #[cfg(test)]
     pub(crate) fn fixture_queue_event(
@@ -295,6 +409,13 @@ impl Conversation {
     }
     pub fn view(&self, scope: &DraftScope) -> Option<&ConversationView> {
         self.views.get(&self.key(scope))
+    }
+    pub(crate) fn retained_running_scopes(&self) -> Vec<DraftScope> {
+        self.views
+            .iter()
+            .filter(|(_, view)| view.running && view.stream_error.is_none())
+            .map(|(scope, _)| scope.clone())
+            .collect()
     }
     pub fn bypass_receipt(&mut self, owner: &DraftScope, value: &Value) -> bool {
         let key = self.key(owner);
@@ -722,6 +843,24 @@ impl Conversation {
         let journal = Journal::new(crate::client::state_dir()?.join("submissions"))?;
         let (journal, entry) = journal.review(submission_id, expected_revision)?;
         entry.verify_owner(connection, scope)?;
+        if entry.legacy_image_paths.iter().any(Option::is_some) {
+            let key = self.key(scope);
+            if self.views.get(&key).is_some_and(|view| view.preparing) {
+                return Err("A send is already being prepared".into());
+            }
+            let worker = self.worker(connection.clone(), key.clone())?;
+            self.views.entry(key.clone()).or_default().preparing = true;
+            if worker
+                .send(worker::Command::Discard(entry, journal))
+                .is_err()
+            {
+                self.views.entry(key).or_default().preparing = false;
+                return Err(
+                    "Conversation worker is unavailable; the saved send was retained".into(),
+                );
+            }
+            return Ok(());
+        }
         journal.retire(&entry)?;
         if let Some(view) = self.views.get_mut(&self.key(scope)) {
             if view.uncertain.as_deref() == Some(submission_id) {
@@ -887,6 +1026,9 @@ impl Conversation {
                 | worker::Reply::Workspace { origin, .. }
                 | worker::Reply::Snapshot { origin, .. }
                 | worker::Reply::Admitted { origin, .. }
+                | worker::Reply::AttachmentsReady { origin, .. }
+                | worker::Reply::Discarded { origin, .. }
+                | worker::Reply::InputRejected { origin, .. }
                 | worker::Reply::Event { origin, .. }
                 | worker::Reply::Failed { origin, .. }
                 | worker::Reply::Recovered { origin, .. }
@@ -999,7 +1141,16 @@ impl Conversation {
                         self.workspaces.remove(&scope);
                     }
                     let view = self.views.entry(scope.clone()).or_default();
+                    let recovered_error = view.stream_error.take().filter(|error| {
+                        view.error.as_ref() == Some(error) && view.uncertain.is_none()
+                    });
                     view.install(snapshot, history);
+                    if let Some(error) = recovered_error {
+                        updates.push(Update::StreamRecovered {
+                            scope: scope.clone(),
+                            error,
+                        });
+                    }
                     if folder_confirmed {
                         view.workspace_uncertain = false;
                     }
@@ -1160,14 +1311,67 @@ impl Conversation {
                         updates.push(Update::Changed { scope });
                     }
                 }
+                worker::Reply::Discarded { origin, id, result } => {
+                    let scope = self.key(&origin);
+                    let view = self.views.entry(scope.clone()).or_default();
+                    view.preparing = false;
+                    match result {
+                        Ok(()) => {
+                            if view.uncertain.as_deref() == Some(&id) {
+                                view.uncertain = None;
+                                view.error = None;
+                            }
+                            updates.push(Update::Changed { scope });
+                        }
+                        Err(error) => {
+                            view.uncertain = Some(id);
+                            view.error = Some(error.message.clone());
+                            updates.push(Update::Failed {
+                                scope,
+                                message: error.message,
+                                uncertain: error.uncertain,
+                            });
+                        }
+                    }
+                }
+                worker::Reply::AttachmentsReady { origin, id } => {
+                    updates.push(Update::AttachmentsReady {
+                        scope: self.key(&origin),
+                        submission_id: id,
+                    });
+                }
+                worker::Reply::InputRejected {
+                    origin,
+                    id,
+                    message,
+                } => {
+                    let scope = self.key(&origin);
+                    let view = self.views.entry(scope.clone()).or_default();
+                    view.preparing = false;
+                    view.uncertain = Some(id.clone());
+                    view.error = Some(message.clone());
+                    updates.push(Update::InputRejected {
+                        scope,
+                        submission_id: id,
+                        message,
+                    });
+                }
                 worker::Reply::Failed {
                     origin,
                     id,
                     message,
                     uncertain,
+                    stream_loss,
                 } => {
                     let key = self.key(&origin);
                     let view = self.views.entry(key).or_default();
+                    if stream_loss {
+                        view.stream_error = Some(message.clone());
+                    }
+                    // A transport retry must not hide an unresolved send receipt.
+                    if stream_loss && id.is_none() && view.uncertain.is_some() {
+                        continue;
+                    }
                     if id.is_some() {
                         view.preparing = false;
                     }
@@ -1223,7 +1427,16 @@ impl Conversation {
                     view.metadata = snapshot.metadata;
                     view.prompts = snapshot.prompts;
                     view.admissions = snapshot.pending;
+                    let recovered_error = view.stream_error.take().filter(|error| {
+                        view.error.as_ref() == Some(error) && view.uncertain.is_none()
+                    });
                     view.error = None;
+                    if let Some(error) = recovered_error {
+                        updates.push(Update::StreamRecovered {
+                            scope: key.clone(),
+                            error,
+                        });
+                    }
                     for admission in &view.admissions {
                         if !admission.input_id.is_empty() {
                             view.submitted.insert(admission.input_id.clone());
@@ -1314,9 +1527,16 @@ fn validate(input: &SendInput) -> Result<(), String> {
         return Err("Unsupported approval mode".into());
     }
     for file in &input.attachments {
-        if !file.path.is_absolute() || !file.path.is_file() {
+        let metadata = file
+            .path
+            .is_absolute()
+            .then(|| std::fs::metadata(&file.path).ok())
+            .flatten()
+            .filter(|metadata| metadata.is_file())
+            .ok_or_else(|| format!("Could not read {}. Select the file again", file.name))?;
+        if metadata.len() > crate::gateway::MAX_CHAT_ATTACHMENT_BYTES as u64 {
             return Err(format!(
-                "Could not read {}. Select the file again",
+                "{} exceeds the 25 MiB attachment limit. Choose a smaller file",
                 file.name
             ));
         }

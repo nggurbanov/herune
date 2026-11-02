@@ -304,3 +304,184 @@ fn retiring_raw_profile_does_not_retire_selected_route_with_same_alias() {
     assert!(!manager.blocks_profile_retirement(1, Some("default")));
     assert!(manager.blocks_profile_retirement(1, None));
 }
+
+#[test]
+fn stream_reconnects_after_multiple_socket_failures_without_resending_prompt() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = routed(&listener);
+    let server = thread::spawn(move || {
+        let mut first = socket(&listener);
+        rpc(&mut first, "session.resume", "dixie", snapshot("dixie"));
+        history(&listener, "dixie");
+        drop(first);
+        // Two failed handshakes exhaust the old three-failure retry limit.
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+        }
+        let mut recovered = socket(&listener);
+        rpc(&mut recovered, "session.resume", "dixie", snapshot("dixie"));
+        history(&listener, "dixie");
+        recovered
+            .get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        match recovered.read() {
+            Err(tungstenite::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            other => panic!("unexpected request after reconnect: {other:?}"),
+        }
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 7,
+        profile: "default".into(),
+        profile_intent: ProfileIntent::NativeSelf,
+        session: Some("stored".into()),
+    };
+    let (replies, receive) = mpsc::channel();
+    let send = spawn(connection, scope.clone(), replies, Arc::new(|| {}));
+    send.send(Command::Attach).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(25);
+    let mut snapshots = 0;
+    let mut failures = 0;
+    while Instant::now() < deadline && snapshots < 2 {
+        match receive.recv_timeout(Duration::from_secs(1)) {
+            Ok(Reply::Snapshot { origin, .. }) => {
+                assert_eq!(origin, scope);
+                snapshots += 1;
+            }
+            Ok(Reply::Failed { origin, id, .. }) => {
+                assert_eq!(origin, scope);
+                assert!(id.is_none());
+                failures += 1;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("worker exited: {error}"),
+        }
+    }
+    assert_eq!(snapshots, 2, "the stored conversation was not reattached");
+    assert!(
+        failures >= 3,
+        "expected the disconnect and two failed handshakes"
+    );
+    server.join().unwrap();
+    drop(send);
+}
+
+#[test]
+fn initial_attach_recovers_when_gateway_becomes_available() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = routed(&listener);
+    let server = thread::spawn(move || {
+        for _ in 0..2 {
+            let (stream, _) = listener.accept().unwrap();
+            drop(stream);
+        }
+        let mut ws = socket(&listener);
+        rpc(&mut ws, "session.resume", "dixie", snapshot("dixie"));
+        history(&listener, "dixie");
+        ws.get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        match ws.read() {
+            Err(tungstenite::Error::Io(error))
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            other => panic!("unexpected request after initial attach: {other:?}"),
+        }
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 7,
+        profile: "default".into(),
+        profile_intent: ProfileIntent::NativeSelf,
+        session: Some("stored".into()),
+    };
+    let (replies, receive) = mpsc::channel();
+    let send = spawn(connection, scope.clone(), replies, Arc::new(|| {}));
+    send.send(Command::Attach).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut failures = 0;
+    let mut attached = false;
+    while Instant::now() < deadline && !attached {
+        match receive.recv_timeout(Duration::from_secs(1)) {
+            Ok(Reply::Snapshot { origin, .. }) => {
+                assert_eq!(origin, scope);
+                attached = true;
+            }
+            Ok(Reply::Failed { origin, id, .. }) => {
+                assert_eq!(origin, scope);
+                assert!(id.is_none());
+                failures += 1;
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("worker exited: {error}"),
+        }
+    }
+    assert!(
+        attached,
+        "initial attach did not recover after the gateway returned"
+    );
+    assert!(failures >= 2);
+    server.join().unwrap();
+    drop(send);
+}
+
+#[test]
+fn explicit_resume_refusal_stops_automatic_attach_retries() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = routed(&listener);
+    let server = thread::spawn(move || {
+        let (failed, _) = listener.accept().unwrap();
+        drop(failed);
+        let mut ws = socket(&listener);
+        let request: Value =
+            serde_json::from_str(&ws.read().unwrap().into_text().unwrap()).unwrap();
+        assert_eq!(request["method"], "session.resume");
+        assert_eq!(request["params"]["profile"], "dixie");
+        ws.send(Message::Text(json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":4007,"message":"session not found"}}).to_string().into())).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(20))
+                }
+                other => panic!("unexpected connection after explicit refusal: {other:?}"),
+            }
+        }
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 7,
+        profile: "default".into(),
+        profile_intent: ProfileIntent::NativeSelf,
+        session: Some("stored".into()),
+    };
+    let (replies, receive) = mpsc::channel();
+    let send = spawn(connection, scope.clone(), replies, Arc::new(|| {}));
+    send.send(Command::Attach).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut refused = false;
+    while Instant::now() < deadline && !refused {
+        match receive.recv_timeout(Duration::from_secs(1)) {
+            Ok(Reply::Failed {
+                origin, message, ..
+            }) => {
+                assert_eq!(origin, scope);
+                refused = message.contains("session not found");
+            }
+            Ok(_) | Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(error) => panic!("worker exited: {error}"),
+        }
+    }
+    assert!(refused, "explicit refusal must be surfaced to the user");
+    server.join().unwrap();
+    drop(send);
+}

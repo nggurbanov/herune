@@ -11,17 +11,18 @@ const option = name => { const index = args.indexOf(name); return index >= 0 ? a
 const binary = option('--binary') ?? path.join(rune, 'target/debug/herune')
 const snapshot = option('--snapshot')
 const canonical = args.includes('--canonical')
+const checkDecisions = args.includes('--decisions')
 if (!process.env.DISPLAY && process.platform === 'linux') throw new Error('Run this native smoke under xvfb-run -a or an isolated test display')
 const assets = JSON.parse(zlib.gunzipSync(fs.readFileSync(path.join(rune, 'assets/plugin-host/assets.json.gz'))))
 const source = `import * as React from 'react'; import {Button,host} from '@hermes/plugin-sdk';
 let storage;let upload;async function protocolProof(){const created=await host.request('session.create',{profile:'research',title:'Synthetic protocol proof'});const result=await host.request('session.title',{session_id:created.session_id,title:'Synthetic rename'});window.ipc.postMessage(JSON.stringify({type:'proof-canonical',created,result}));}
 function Proof(){const[n,setN]=React.useState(0);return React.createElement('section',null,React.createElement('h1',null,'Real Hermes SDK renderer'),React.createElement('p',null,'Synthetic plugin · research profile'),React.createElement(Button,{id:'proof-button',onClick:()=>{setN(v=>v+1);storage.set('clicks',n+1);${canonical ? 'protocolProof();' : ''}host.request('native.proof',{profile:'research'}).then(value=>window.ipc.postMessage(JSON.stringify({type:'proof-rpc',value})));upload().then(value=>window.ipc.postMessage(JSON.stringify({type:'proof-upload',value})));}},'Clicks '+n));}
 export default{id:'native-sdk-proof',name:'Native SDK proof',version:'1.0.0',register(ctx){storage=ctx.storage;upload=()=>ctx.rest('/upload',{method:'POST',upload:{filename:'proof.bin',bytes:new Uint8Array([0,255,128]).buffer}});ctx.socket('/events',value=>window.ipc.postMessage(JSON.stringify({type:'proof-socket',value})));ctx.register({id:'proof',area:'primarySidebar',title:'Proof',render:()=>React.createElement(Proof)});ctx.onEvent('proof.event',event=>window.ipc.postMessage(JSON.stringify({type:'proof-event',event})));ctx.onDispose(()=>window.ipc.postMessage(JSON.stringify({type:'proof-disposed'})));}};`
-const html = `<!doctype html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content="default-src 'self' blob: data:; script-src 'self' blob: 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'"><link rel=stylesheet href=host.css><div id=root></div><script type=module src=host.js></script><script>window.addEventListener('hermes-host-message',e=>{if(e.detail.type==='proof-click'){document.getElementById('proof-button')?.click();requestAnimationFrame(()=>window.ipc.postMessage(JSON.stringify({type:'proof-after-click',text:document.getElementById('root').textContent})));}})</script>`
+const html = `<!doctype html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content="default-src 'self' blob: data:; script-src 'self' blob: 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'"><link rel=stylesheet href=host.css><div id=root></div><script type=module src=host.js></script><script>window.addEventListener('hermes-host-message',e=>{if(e.detail.type==='proof-click'){document.getElementById('proof-button')?.click();requestAnimationFrame(()=>window.ipc.postMessage(JSON.stringify({type:'proof-after-click',text:document.getElementById('root').textContent})));}else if(e.detail.type==='proof-toggle'){const button=document.querySelector('aside button');if(button)button.click();else window.ipc.postMessage(JSON.stringify({type:'plugin-error',message:'Plugin toggle not found'}));}})</script>`
 const child = spawn(binary, ['--native-web-host'], { env: { ...process.env, WEBKIT_DISABLE_COMPOSITING_MODE: '1' }, stdio: ['pipe', 'pipe', 'pipe'] })
 const send = value => child.stdin.write(JSON.stringify(value) + '\n')
 let output = '', stderr = '', failure, rendered = false, clicked = false, rpc = false, uploaded = false, stream = false, stored = false, disposed = false, events = 0, closing = false, canonicalDone = !canonical
-let transfer = null, chunked = false
+let transfer = null, chunked = false, decisionRequested = false, decisionSeen = !checkDecisions
 const socketReceipt = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 const gatewayReceipt = '11111111-2222-4333-8444-555555555555'
 const require = (condition, message) => { if (!condition) throw new Error(message) }
@@ -30,6 +31,7 @@ function capture() {
 }
 function finishIfReady() {
   if (!rendered || !clicked || !rpc || !uploaded || !stream || !stored || !canonicalDone || events !== 2 || closing) return
+  if (!decisionSeen) { if (!decisionRequested) { decisionRequested = true; send({ type: 'proof-toggle' }) }; return }
   closing = true
   if (snapshot) capture()
   send({ type: 'close' })
@@ -108,8 +110,12 @@ function onEvent(event) {
       require(event.value.profile === 'research' && event.value.method === 'native.proof', 'The RPC bridge changed its owner or response')
       rpc = true
       break
-    case 'plugin-storage':
-      if (event.values['hermes.plugin.native-sdk-proof.clicks'] === '1') stored = true
+    case 'plugin-storage-patch':
+      if (event.key === 'hermes.plugin.native-sdk-proof.clicks' && event.value === '1') stored = true
+      break
+    case 'plugin-decision-patch':
+      require(checkDecisions && event.pluginId === 'native-sdk-proof' && event.enabled === false, 'The plugin decision changed identity or value')
+      decisionSeen = true
       break
     case 'proof-event':
       require(event.event.profile === 'research', 'Event ownership was lost')
@@ -141,4 +147,4 @@ const completed = new Promise((resolve, reject) => {
 })
 send({ type: 'document', document: { title: 'Synthetic Hermes SDK proof', html, assets, allow_media: false } })
 await completed
-console.log(JSON.stringify({ native_window: true, extracted_sdk: true, canonical_adapter: canonical, react_hook: true, rpc_owner: 'research', deduplicated_events: events, storage: true, chunked_upload: true, namespace_stream: true, disposed: true, snapshot: snapshot ? path.resolve(snapshot) : null }))
+console.log(JSON.stringify({ native_window: true, extracted_sdk: true, canonical_adapter: canonical, react_hook: true, rpc_owner: 'research', deduplicated_events: events, storage: true, decision_patch: checkDecisions, chunked_upload: true, namespace_stream: true, disposed: true, snapshot: snapshot ? path.resolve(snapshot) : null }))

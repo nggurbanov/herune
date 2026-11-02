@@ -1,10 +1,127 @@
 use super::*;
+#[test]
+fn unsupported_legacy_live_scope_preserves_owned_running_and_retries_on_refresh() {
+    let mut state = SidebarState::new();
+    state.owner_profile = "research".into();
+    state
+        .live
+        .insert(("research".into(), "stale".into()), Status::Working);
+    state
+        .live
+        .insert(("other".into(), "other".into()), Status::Working);
+    state.retained_running.insert((
+        "research".into(),
+        "owned".into(),
+        crate::source::ProfileIntent::Backend,
+    ));
+    state.apply(
+        "sidebar.live.research",
+        Err(crate::gateway::LIVE_SCOPE_UNSUPPORTED.into()),
+    );
+    assert!(!state.errors.contains_key("sidebar.live.research"));
+    assert!(
+        !state
+            .live
+            .contains_key(&("research".into(), "stale".into()))
+    );
+    assert!(state.live.contains_key(&("other".into(), "other".into())));
+    assert!(state.status(&session("owned", "research")) == Status::Working);
+    assert!(state.live_requests().is_empty());
+    assert!(
+        state
+            .action(Action::Refresh)
+            .iter()
+            .any(|(op, _)| op == "sidebar.live.research")
+    );
+    state.apply(
+        "sidebar.live.research",
+        Err("Workspace RPC refused (4000)".into()),
+    );
+    assert_eq!(
+        state
+            .errors
+            .get("sidebar.live.research")
+            .map(String::as_str),
+        Some("Workspace RPC refused (4000)")
+    );
+    state.reset_data();
+    assert!(
+        state
+            .live_requests()
+            .iter()
+            .any(|(op, _)| op == "sidebar.live.research")
+    );
+}
 fn session(id: &str, profile: &str) -> SidebarSession {
     SidebarSession {
         id: id.into(),
         profile: Some(profile.into()),
         message_count: 1,
         ..Default::default()
+    }
+}
+#[test]
+fn gui_conversations_appear_once_in_batched_and_legacy_sidebar_lists() {
+    let sessions = [
+        json!({"id":"same", "profile":"default", "source":"gui"}),
+        json!({"id":"same", "profile":"work", "source":"gui"}),
+        json!({"id":"local", "profile":"default", "source":"cli"}),
+        json!({"id":"message", "profile":"default", "source":"telegram"}),
+    ];
+    for legacy in [false, true] {
+        let mut state = SidebarState::new();
+        state.prefs.all_profiles = true;
+        state.batch_missing = legacy;
+        let effects = state.load("default");
+        let list = |request: &PageRequest, filter: &str| {
+            let excluded = request
+                .query
+                .iter()
+                .find(|(k, _)| k == filter)
+                .unwrap()
+                .1
+                .split(',')
+                .collect::<HashSet<_>>();
+            json!({"sessions":sessions.iter().filter(|row| !excluded.contains(row["source"].as_str().unwrap())).collect::<Vec<_>>()})
+        };
+        if legacy {
+            for (name, request) in effects
+                .iter()
+                .filter(|(name, _)| name == "sidebar.recents" || name == "sidebar.messaging")
+            {
+                state.apply(name, Ok(list(request, "exclude_sources")));
+            }
+        } else {
+            let request = &effects
+                .iter()
+                .find(|(name, _)| name == "sidebar.batch")
+                .unwrap()
+                .1;
+            state.apply("sidebar.batch", Ok(json!({"recents":list(request,"recents_exclude"),"messaging":list(request,"messaging_exclude"),"cron":{"sessions":[]}})));
+        }
+        let ids: Vec<_> = state
+            .all_rows()
+            .into_iter()
+            .map(|row| (row.profile().to_owned(), row.id.clone()))
+            .collect();
+        assert_eq!(
+            ids.len(),
+            4,
+            "a GUI session was shown in both slices (legacy={legacy})"
+        );
+        assert!(
+            ids.contains(&("default".into(), "same".into()))
+                && ids.contains(&("work".into(), "same".into()))
+        );
+        assert_eq!(
+            state
+                .messaging
+                .rows
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message"]
+        );
     }
 }
 #[test]

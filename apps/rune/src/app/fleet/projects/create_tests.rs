@@ -316,7 +316,12 @@ fn idea_write_terminal_does_not_consume_next_create_receipt() {
         assert_eq!(url.path(), "/api/fs/write-text");
         let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(query.get("profile").map(String::as_str), Some("work"));
-        assert_eq!(query.get("token").map(String::as_str), Some("fixture"));
+        assert!(!query.contains_key("token"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_ascii_lowercase().trim() == "x-hermes-session-token: fixture")
+        );
         assert_eq!(
             serde_json::from_slice::<Value>(&body).unwrap(),
             json!({"path":"/authoritative/a/IDEA.md","content":"Idea A\n"})
@@ -659,7 +664,12 @@ fn retained_create_and_failed_idea_write_stay_on_original_source_with_equal_id()
         assert_eq!(url.path(), "/api/fs/write-text");
         let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(query.get("profile").map(String::as_str), Some("work"));
-        assert_eq!(query.get("token").map(String::as_str), Some("fixture"));
+        assert!(!query.contains_key("token"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_ascii_lowercase().trim() == "x-hermes-session-token: fixture")
+        );
         assert_eq!(
             serde_json::from_slice::<Value>(&body).unwrap(),
             json!({"path":"/authoritative/a/IDEA.md","content":"Idea A\n"})

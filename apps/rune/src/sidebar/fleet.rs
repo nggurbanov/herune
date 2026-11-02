@@ -15,6 +15,7 @@ pub struct SourceSidebar {
     network: PageNetwork,
     scope: DraftScope,
     retired: bool,
+    profiles: Vec<String>,
 }
 impl SourceSidebar {
     pub fn new(
@@ -39,7 +40,7 @@ impl SourceSidebar {
         if state.source_stamp() != Some(binding.stamp()) {
             return Err("The sidebar source binding could not be established".into());
         }
-        state.owner_profile = profile;
+        state.owner_profile = profile.clone();
         if let Some(lease) = binding.lease() {
             state.set_canonical_profiles(lease.profiles());
         }
@@ -58,6 +59,7 @@ impl SourceSidebar {
                 session: None,
             },
             retired: false,
+            profiles: vec![profile],
         })
     }
     pub fn label(&self) -> &str {
@@ -114,6 +116,20 @@ impl SourceSidebar {
     }
     pub fn set_profiles(&mut self, profiles: &[Profile]) {
         self.state.set_canonical_profiles(profiles);
+        self.profiles = profiles
+            .iter()
+            .map(|profile| profile.name.clone())
+            .collect();
+    }
+    pub fn search_profiles(&self) -> Vec<String> {
+        if !self.state.prefs.all_profiles {
+            return vec![self.state.owner_profile.clone()];
+        }
+        let mut profiles = self.profiles.clone();
+        profiles.push(self.state.owner_profile.clone());
+        profiles.sort();
+        profiles.dedup();
+        profiles
     }
     pub fn blocks_owner_change(&self) -> bool {
         self.state.blocks_owner_change()
@@ -131,6 +147,23 @@ impl SourceSidebar {
         }
         let effects = self.state.action(action);
         self.dispatch(effects);
+    }
+    pub fn search(
+        &mut self,
+        query: &str,
+        now: f64,
+        profiles: Vec<String>,
+    ) -> (bool, Option<std::time::Duration>) {
+        if self.retired {
+            return (false, None);
+        }
+        let targets = profiles
+            .into_iter()
+            .map(|profile| (profile, false))
+            .collect();
+        let (changed, delay, effects) = self.state.search_profiles_tick(query, now, targets);
+        self.dispatch(effects);
+        (changed, delay)
     }
     fn dispatch(&mut self, effects: Vec<PageEffect>) {
         for (operation, request) in effects {

@@ -487,6 +487,42 @@ fn audio_lease_keeps_the_captured_named_or_raw_owner() {
 }
 
 #[test]
+fn selected_history_continuation_retains_the_captured_profile() {
+    for foreign in [false, true] {
+        let source = listener();
+        let connection = connection(&source, BackendTarget::Named("dixie".into()));
+        let server = thread::spawn(move || {
+            let _socket = socket(&source);
+            http(
+                &source,
+                Some("dixie"),
+                json!({"profile":"dixie","session_id":"tip","messages":[{"role":"assistant","text":"Saved reply"}]}),
+            );
+            http(
+                &source,
+                Some("dixie"),
+                json!({"id":"tip","profile":if foreign {"default"} else {"dixie"},"parent_session_id":"root","source":"gui","session_key":null,"model_config":null}),
+            );
+            if !foreign {
+                http(
+                    &source,
+                    Some("dixie"),
+                    json!({"id":"root","profile":"dixie","end_reason":"compression"}),
+                );
+            }
+        });
+        let mut gateway = Gateway::connect(&connection).unwrap();
+        let history = gateway.history_for(&ProfileProvenance::NativeSelf, "root", 0);
+        if foreign {
+            assert!(history.unwrap_err().contains("History session changed"));
+        } else {
+            assert_eq!(history.unwrap().messages[0].content, "Saved reply");
+        }
+        server.join().unwrap();
+    }
+}
+
+#[test]
 fn selected_session_list_uses_captured_target_and_rejects_a_conflicting_owner() {
     let source = listener();
     let connection = connection(&source, BackendTarget::Named("dixie".into()));

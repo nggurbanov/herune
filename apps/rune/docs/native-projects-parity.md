@@ -181,3 +181,34 @@ service was run in this pass.
 Linux tests have exercised project creation, local folder selection, and remote
 folder workflows. Native chooser and broader platform acceptance remain open;
 this work does not establish full Projects parity.
+
+### Active project selection while a write is pending (2026-11-02)
+
+Entering another project now retains the latest captured choice while a previous
+active-project write is in flight, even when the old tree still reports the later
+choice as active. After a confirmed reply, the newer choice is sent to its captured
+owner. An uncertain first result is not blindly retried for the same owner; a
+queued action for a retired owner is discarded. The response must confirm the
+requested ID. Existing source, profile and project checks remain in force.
+
+The real controller and private authenticated loopback WebSocket peer exercised
+the held-write transition, an uncertain reply and an owner switch. The earlier
+held-write regression failed before the change. The final Linux Rust suite passed
+960 tests with 15 ignored; the intermediate run had a fixture error due to
+missing project labels. No real Hermes gateway or macOS acceptance was performed
+for this increment. Logs and the bounded source patch are retained under
+`standalone-desktop-artifacts/project-active-queue-20261102/`.
+
+### Project working directories across chat switches (2026-11-02)
+
+A Linux native-window test used the pinned real Hermes gateway, one private
+profile and a synthetic model endpoint. Two projects were created through the
+gateway in isolated workspace directories. In the UI, a new conversation was
+sent in each project; the gateway's session database recorded the appropriate
+working directory for each. Switching back to the first tab and sending a
+follow-up kept both recorded directories unchanged and delivered the follow-up.
+The two runs used binary SHA-256
+`4530ebb9678b1312be0a471675d26c4a9affc9286f30be0e42b7eb1f4ec0b801`.
+This proves this one-profile Linux scenario; project creation in the UI, other
+profiles, real providers and macOS were not tested here. Evidence is in
+`standalone-desktop-artifacts/project-cwd-native-20261102/`.

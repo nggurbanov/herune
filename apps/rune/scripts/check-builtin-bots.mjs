@@ -15,7 +15,8 @@ const owner={profile:'research',target_profile:'research',profiles,connection_id
 const html=`<!doctype html><meta charset=utf-8><meta http-equiv=Content-Security-Policy content="default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'"><link rel=stylesheet href=host.css><div id=root></div><script type=module src=host.js></script><script>window.addEventListener('hermes-host-message',e=>{if(e.detail.type==='inspect-bots')window.ipc.postMessage(JSON.stringify({type:'bots-inspected',text:document.getElementById('plugin-content').textContent,buttons:[...document.querySelectorAll('button')].map(b=>b.getAttribute('aria-label')||b.title||b.textContent)}));if(e.detail.type==='open-create'){const b=[...document.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='New bot or group chat');b?.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));setTimeout(()=>window.ipc.postMessage(JSON.stringify({type:'create-menu',items:[...document.querySelectorAll('[role=menuitem]')].map(b=>b.textContent)})),150);}if(e.detail.type==='pick-create'){const b=[...document.querySelectorAll('[role=menuitem]')].find(b=>b.textContent===e.detail.label);b?.click();setTimeout(()=>window.ipc.postMessage(JSON.stringify({type:'create-dialog',text:document.querySelector('[role=dialog]')?.textContent,buttons:[...document.querySelectorAll('[role=dialog] button')].map(b=>b.textContent)})),450);}if(e.detail.type==='open-petdex'){[...document.querySelectorAll('[role=dialog] button')].find(b=>b.textContent==='Pet')?.click();setTimeout(()=>window.ipc.postMessage(JSON.stringify({type:'petdex-dialog',text:document.querySelector('[role=dialog]')?.textContent,images:[...document.querySelectorAll('[role=dialog] img')].map(image=>({width:image.naturalWidth,complete:image.complete}))})),550);}})</script>`
 const child=spawn(option('--binary')??path.join(rune,'target/debug/herune'),['--native-web-host'],{env:{...process.env,WEBKIT_DISABLE_COMPOSITING_MODE:'1'},stdio:['pipe','pipe','pipe']})
 const send=value=>child.stdin.write(JSON.stringify(value)+'\n')
-const gateways=new Map();let gatewayCount=0
+const gateways=new Map();let gatewayCount=0, gatewayAttempts=0
+const initialOffline=args.includes('--initial-offline')
 let output='',stderr='',failure,rendered=false,readRoster=false,closing=false,petGallery=false,petThumbs=0
 const require=(condition,message)=>{if(!condition)throw new Error(message)}
 function thumbnail(slug) {
@@ -36,7 +37,7 @@ function handle(event){
   if(event.type==='plugin-rendered'){rendered=event.areas.includes('panes')}
   if(event.type==='plugin-request'){
     const {id,kind,payload}=event
-    if(kind==='plugin-gateway-prepare'){require(payload.connectionId===owner.connection_id,'Gateway owner changed');const receipt='11111111-2222-4333-8444-'+String(++gatewayCount).padStart(12,'0');gateways.set(receipt,payload.profile);answer(id,{url:'ws://hermes-native-gateway.invalid/'+receipt})}
+    if(kind==='plugin-gateway-prepare'){require(payload.connectionId===owner.connection_id,'Gateway owner changed');if(initialOffline && ++gatewayAttempts===1)send({type:'plugin-response',id,error:'Synthetic gateway unavailable'});else{const receipt='11111111-2222-4333-8444-'+String(++gatewayCount).padStart(12,'0');gateways.set(receipt,payload.profile);answer(id,{url:'ws://hermes-native-gateway.invalid/'+receipt})}}
     else if(kind==='plugin-socket-open'){answer(id,{accepted:true});send({type:'plugin-socket',receipt:payload.receipt,event:'open',data:{protocol:''}})}
     else if(kind==='plugin-socket-send'){
       const frame=JSON.parse(payload.frame.text);answer(id,{accepted:true})
@@ -65,6 +66,7 @@ function handle(event){
   }
   if(event.type==='bots-inspected'){
     require(rendered&&readRoster,'The native Bots pane did not render or read its real transport')
+    if(initialOffline)require(gatewayAttempts>=2,'The initial gateway failure was not followed by a retry')
     require(!/Spread syntax|Unhandled|TypeError|failed to/i.test(event.text),'The original Bots pane showed an error: '+event.text)
     require(event.text.includes('Research')&&event.text.includes('Muse'),'The original Bots roster did not display the two synthetic identities: '+event.text)
     require(event.buttons.some(text=>/group|room/i.test(text)),'The original group/room action is absent')
@@ -84,4 +86,4 @@ const done=new Promise((resolve,reject)=>{
 })
 send({type:'document',document:{title:'Synthetic original Hermes Bots',html,assets,allow_media:false}})
 await done
-console.log(JSON.stringify({native_window:true,extracted_bundled_bots:true,synthetic_profiles:2,group_action:true,group_dialog:mode==='group',petdex:mode==='petdex',snapshot:snapshot?path.resolve(snapshot):null}))
+console.log(JSON.stringify({native_window:true,extracted_bundled_bots:true,initial_offline_recovered:initialOffline,synthetic_profiles:2,group_action:true,group_dialog:mode==='group',petdex:mode==='petdex',snapshot:snapshot?path.resolve(snapshot):null}))

@@ -15,6 +15,7 @@ pub(crate) enum Command {
     Workspace(super::workspace::Intent),
     Attach,
     Send(Prepared, Journal),
+    Discard(Prepared, Journal),
     Control(Control),
 }
 pub(crate) enum Control {
@@ -94,6 +95,20 @@ pub(crate) enum Reply {
         policy_stamp: Option<PolicyStamp>,
         policy_fields: PolicyFields,
     },
+    Discarded {
+        origin: DraftScope,
+        id: String,
+        result: Result<(), CallError>,
+    },
+    AttachmentsReady {
+        origin: DraftScope,
+        id: String,
+    },
+    InputRejected {
+        origin: DraftScope,
+        id: String,
+        message: String,
+    },
     Event {
         origin: DraftScope,
         event: Event,
@@ -104,6 +119,7 @@ pub(crate) enum Reply {
         id: Option<String>,
         message: String,
         uncertain: bool,
+        stream_loss: bool,
     },
     ClarifyLocked {
         origin: DraftScope,
@@ -147,6 +163,14 @@ fn connect_scope(connection: &Connection, scope: &DraftScope) -> Result<SessionT
         crate::source::ProfileIntent::NativeSelf => {
             SessionTransport::connect_native_self(connection, &scope.profile)
         }
+    }
+}
+fn uncertain_legacy_send() -> CallError {
+    CallError {
+        message: "The legacy gateway cannot prove whether this turn was sent. Read the transcript before discarding the saved send; retrying could duplicate it".into(),
+        code: None,
+        data: None,
+        uncertain: true,
     }
 }
 impl Worker {
@@ -234,42 +258,71 @@ impl Worker {
         let snapshot = self.transport()?.resume(&stored)?;
         self.attached(snapshot)
     }
+    fn attach_failed(&mut self, error: CallError) {
+        // Retry transport failures, but do not repeatedly resume a session the
+        // gateway has explicitly refused (for example, a deleted session).
+        let retry = self.stored.is_some() && error.code.is_none();
+        self.failure(None, error, retry);
+    }
     fn failure(&mut self, id: Option<String>, error: CallError, retry_stream: bool) {
-        self.reconnect_attempts += 1;
-        self.want_reconnect = retry_stream && self.reconnect_attempts < 3;
+        self.reconnect_attempts = self.reconnect_attempts.saturating_add(1);
+        self.want_reconnect = retry_stream;
         let uncertain = error.uncertain;
         self.notify(Reply::Failed {
             origin: self.scope.clone(),
             id,
             message: error.message,
             uncertain,
+            stream_loss: retry_stream,
         });
         // A timed-out response is never consumed by another request. Reattach
         // on a new socket; no mutation or input is replayed by reconnection.
         self.transport = None;
-        self.reconnect_at = Instant::now() + Duration::from_secs(2);
+        let delay = (2_u64 << self.reconnect_attempts.saturating_sub(1).min(4)).min(30);
+        self.reconnect_at = Instant::now() + Duration::from_secs(delay);
     }
-    fn submit(&mut self, mut entry: Prepared, journal: &Journal) -> Result<(), CallError> {
+    fn submit(
+        &mut self,
+        mut entry: Prepared,
+        journal: &Journal,
+    ) -> Result<Option<String>, CallError> {
         let claim = journal.claim(&entry.submission_id)?;
         let journal = &claim;
         journal.check_current(&entry)?;
         entry.verify_owner(&self.connection, &self.scope)?;
         if entry.legacy_attempted {
-            return Err("The legacy gateway cannot prove whether this turn was sent. Read the transcript before discarding the saved send; retrying could duplicate it".into());
+            return Err(uncertain_legacy_send());
         }
+        // Resuming an existing chat receives the gateway greeting. A fresh
+        // chat needs a read-only probe before choosing its create format.
+        let stored = entry.stored.clone().or(entry.session.clone());
+        let resumed = if let Some(stored) = &stored {
+            Some(self.transport()?.resume(stored)?)
+        } else {
+            self.transport()?.negotiate_protocol()?;
+            None
+        };
         let canonical = self.transport()?.canonical;
         if entry.canonical.is_some_and(|saved| saved != canonical) {
             return Err(
                 "The gateway protocol changed; review the saved send before retrying".into(),
             );
         }
+        if !canonical && entry.attempted {
+            // Legacy peers may accept or ignore submission_id without providing
+            // idempotency. Refresh the transcript, but never resend an unknown
+            // admission or stage its attachments a second time.
+            if let Some(snapshot) = resumed.as_ref() {
+                self.attached(snapshot.clone())?;
+            }
+            return Err(uncertain_legacy_send());
+        }
         entry.canonical = Some(canonical);
         journal.save(&entry)?;
         // A stored session is resumed by its durable id. Failure never creates
         // an unrelated conversation and never changes the GUI surface to CLI.
-        let stored = entry.stored.clone().or(entry.session.clone());
-        let (snapshot, created) = if let Some(stored) = stored {
-            (self.transport()?.resume(&stored)?, false)
+        let (snapshot, created) = if let Some(snapshot) = resumed {
+            (snapshot, false)
         } else if entry.input.canonical_bot {
             if let Some(winner) = self.bot_registry()? {
                 (self.transport()?.resume(&winner)?, false)
@@ -314,12 +367,100 @@ impl Worker {
             let params = create_params(&entry, canonical);
             (self.transport()?.create(params)?, true)
         };
+        // A fresh legacy send has not produced a turn, so its minted stored
+        // identity cannot legitimately advance to a compression continuation.
+        // Check before replacing the journal's original owner or staging files.
+        if !canonical
+            && entry.session.is_none()
+            && !entry.attempted
+            && !entry.legacy_attempted
+            && entry
+                .stored
+                .as_deref()
+                .is_some_and(|id| id != snapshot.stored)
+        {
+            return Err("The new conversation returned a different stored session; the saved message was retained".into());
+        }
         entry.runtime = Some(snapshot.runtime.clone());
         entry.stored = Some(snapshot.stored.clone());
         journal.save(&entry)?;
-        if created && !canonical {
+        // Validate before rewinds, policy changes, or uploads. A clean local
+        // rejection keeps the intent until the editor confirms it is durable.
+        let untouched = !entry.attempted
+            && !entry.legacy_attempted
+            && entry.mutations.is_empty()
+            && !entry.policy_done
+            && entry.attached == 0
+            && entry.replay_attached == 0;
+        if untouched {
+            if let Err(message) = validate_transfer_limits(
+                &entry.input.attachments,
+                snapshot
+                    .info
+                    .get("desktop_contract")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|version| version >= 5),
+                canonical,
+            ) {
+                return Ok(Some(message));
+            }
+        }
+        let retrying_empty_legacy = !created
+            && !canonical
+            && stored.as_deref() == Some(snapshot.stored.as_str())
+            && !entry.attempted
+            && !entry.legacy_attempted
+            && entry.input.rewind.is_none()
+            && entry.input.replay.is_none()
+            && snapshot.info.get("lazy").and_then(Value::as_bool) == Some(true)
+            && snapshot.info.get("profile_name").and_then(Value::as_str)
+                == Some(self.scope.profile.as_str())
+            && snapshot
+                .metadata
+                .get("message_count")
+                .and_then(Value::as_u64)
+                == Some(0)
+            && snapshot.messages.is_empty()
+            && !snapshot.running
+            && snapshot.metadata.get("queued").is_none()
+            && snapshot.metadata.get("inflight").is_none();
+        let empty_live = if retrying_empty_legacy {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match self.transport()?.call("session.active_list", json!({})) {
+                    Ok(value)
+                        if exact_legacy_status(
+                            &snapshot.runtime,
+                            &snapshot.stored,
+                            &value,
+                            "idle",
+                        ) =>
+                    {
+                        break true;
+                    }
+                    Ok(value)
+                        if Instant::now() < deadline
+                            && exact_legacy_status(
+                                &snapshot.runtime,
+                                &snapshot.stored,
+                                &value,
+                                "starting",
+                            ) =>
+                    {
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
+                    Ok(_) => break false,
+                    // An unsupported proof keeps the normal history path; an uncertain failure stops.
+                    Err(error) if error.code.is_some() && !error.uncertain => break false,
+                    Err(error) => return Err(error),
+                }
+            }
+        } else {
+            false
+        };
+        if (created && !canonical) || empty_live {
             // Legacy create is lazy: the first real user prompt materializes
-            // its row. Reading that not-yet-existent row would abort the send.
+            // its row. An explicitly verified idle retry is still that empty row.
             self.publish_snapshot(
                 snapshot.clone(),
                 History {
@@ -348,11 +489,17 @@ impl Worker {
                 policy_stamp: None,
                 policy_fields: PolicyFields::default(),
             });
-            return Ok(());
+            return Ok(None);
         }
         let existing = !created || entry.input.canonical_bot && canonical;
         self.prepare_policy(&mut entry, journal, snapshot, existing)?;
         self.prepare_files(&mut entry, journal)?;
+        if !entry.input.attachments.is_empty() {
+            self.notify(Reply::AttachmentsReady {
+                origin: self.scope.clone(),
+                id: entry.submission_id.clone(),
+            });
+        }
         let runtime = entry
             .runtime
             .as_deref()
@@ -362,7 +509,12 @@ impl Worker {
             .as_deref()
             .unwrap_or(&entry.input.text)
             .to_owned();
-        let mut params = json!({"session_id":runtime,"text":text,"submission_id":entry.submission_id,"queued":true,"surface":entry.input.surface.as_deref().unwrap_or("desktop")});
+        let mut params = json!({"session_id":runtime,"text":text,"submission_id":entry.submission_id,"queued":true});
+        if let Some(surface) = entry.input.surface.as_deref() {
+            params["surface"] = json!(surface);
+        } else if !canonical {
+            params["surface"] = json!("desktop");
+        }
         if let Some(replay) = &entry.input.replay {
             let visible = [entry.replay_refs.join("\n"), replay.visible.clone()]
                 .into_iter()
@@ -456,6 +608,7 @@ impl Worker {
                         error.message
                     ),
                     uncertain: error.uncertain,
+                    stream_loss: false,
                 });
             }
         }
@@ -465,15 +618,39 @@ impl Worker {
                 id: None,
                 message: error,
                 uncertain: false,
+                stream_loss: false,
             });
         }
-        Ok(())
+        Ok(None)
     }
     fn bot_registry(&mut self) -> Result<Option<String>, CallError> {
-        let value = self.transport()?.call(
-            "session.list",
-            json!({"scope":"stored","title":"Bot Chat","include_hidden":true,"limit":200}),
-        )?;
+        let canonical = self.transport()?.canonical;
+        // Canonical gateways resolve a title as an exact durable identity;
+        // combining it with a list scope is explicitly rejected.
+        let params = if canonical {
+            json!({"title":"Bot Chat","include_hidden":true,"limit":200})
+        } else {
+            json!({"scope":"stored","title":"Bot Chat","include_hidden":true,"limit":200})
+        };
+        let result = self.transport()?.call("session.list", params);
+        let value = match result {
+            // Older Hermes versions perform an exact, durable title lookup but
+            // reject the newer scope parameter. Never retry an uncertain call.
+            Err(error)
+                if !canonical
+                    && !error.uncertain
+                    && error.code == Some(4000)
+                    && error
+                        .message
+                        .contains("scope: Extra inputs are not permitted") =>
+            {
+                self.transport()?.call(
+                    "session.list",
+                    json!({"title":"Bot Chat","include_hidden":true,"limit":200}),
+                )?
+            }
+            other => other?,
+        };
         let rows = value
             .get("sessions")
             .and_then(Value::as_array)
@@ -802,7 +979,36 @@ impl Worker {
         });
         Ok(())
     }
+    fn discard(&mut self, entry: &Prepared, journal: &Journal) -> Result<(), CallError> {
+        journal.check_current(entry)?;
+        entry.verify_owner(&self.connection, &self.scope)?;
+        if entry.legacy_image_paths.iter().any(Option::is_some) {
+            let stored = entry
+                .stored
+                .as_deref()
+                .ok_or("The saved image has no session owner")?;
+            let snapshot = self.transport()?.resume(stored)?;
+            if Some(snapshot.runtime.as_str()) != entry.runtime.as_deref() {
+                return Err("The image belongs to a different session runtime; reconnect before discarding the saved send".into());
+            }
+            for path in entry.legacy_image_paths.iter().flatten() {
+                let result = self.transport()?.call(
+                    "image.detach",
+                    json!({"session_id":snapshot.runtime,"path":path}),
+                )?;
+                if !result.get("detached").is_some_and(Value::is_boolean) {
+                    return Err(
+                        "The gateway did not confirm image cleanup; the saved send was retained"
+                            .into(),
+                    );
+                }
+            }
+        }
+        journal.retire(entry)?;
+        Ok(())
+    }
     fn prepare_files(&mut self, entry: &mut Prepared, journal: &Journal) -> Result<(), CallError> {
+        use std::io::Read;
         if entry.text.is_none() {
             entry.text = Some(entry.input.text.trim().into());
             journal.save(entry)?;
@@ -813,17 +1019,60 @@ impl Worker {
             .ok_or("Attach a conversation before uploading files")?;
         for index in entry.attached..entry.input.attachments.len() {
             let file = entry.input.attachments[index].clone();
-            let metadata = std::fs::metadata(&file.path)
+            let selected = std::fs::metadata(&file.path)
                 .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
-            // Bounded below the gateway's JSON frame limit after base64 expansion.
-            if !metadata.is_file() || metadata.len() > 5 * 1024 * 1024 {
-                return Err(
-                    format!("{} exceeds this gateway's 5 MB attachment limit", file.name).into(),
-                );
+            if !selected.is_file() {
+                return Err(format!("Could not read {}; select a file", file.name).into());
             }
-            let bytes =
-                std::fs::read(&file.path).map_err(|_| format!("Could not read {}", file.name))?;
+            let mut input = std::fs::File::open(&file.path)
+                .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+            let metadata = input
+                .metadata()
+                .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+            if !metadata.is_file() {
+                return Err(format!("Could not read {}; select a file", file.name).into());
+            }
+            let mut bytes = Vec::new();
+            (&mut input)
+                .take(12)
+                .read_to_end(&mut bytes)
+                .map_err(|_| format!("Could not read {}", file.name))?;
             let mime = image_mime(&bytes);
+            // Canonical images use HTTP. Contract v5 explicitly supports large
+            // WebSocket frames; older or unknown peers retain the smaller limit.
+            let supports_large_frames = self
+                .transport
+                .as_ref()
+                .and_then(|transport| transport.snapshot.as_ref())
+                .and_then(|snapshot| snapshot.info.get("desktop_contract"))
+                .and_then(Value::as_u64)
+                .is_some_and(|version| version >= 5);
+            let limit =
+                if supports_large_frames || (mime.is_some() && entry.canonical == Some(true)) {
+                    crate::gateway::MAX_CHAT_ATTACHMENT_BYTES
+                } else {
+                    5 * 1024 * 1024
+                };
+            if metadata.len() > limit as u64 {
+                return Err(format!(
+                    "{} exceeds the {} MiB attachment limit",
+                    file.name,
+                    limit / (1024 * 1024)
+                )
+                .into());
+            }
+            input
+                .take((limit + 1 - bytes.len()) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| format!("Could not read {}", file.name))?;
+            if bytes.len() > limit {
+                return Err(format!(
+                    "{} exceeds the {} MiB attachment limit",
+                    file.name,
+                    limit / (1024 * 1024)
+                )
+                .into());
+            }
             let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
             if let Some(mime) = mime {
                 if entry.canonical == Some(true) {
@@ -831,6 +1080,46 @@ impl Worker {
                         .transport()?
                         .upload_image(format!("data:{mime};base64,{encoded}"), &file.name)?;
                     entry.images.push(image);
+                } else if self
+                    .transport
+                    .as_ref()
+                    .and_then(|transport| transport.snapshot.as_ref())
+                    .and_then(|snapshot| snapshot.info.get("desktop_contract"))
+                    .and_then(Value::as_u64)
+                    .is_some_and(|version| version >= 2)
+                {
+                    // Stage bytes as an ordinary file first: unlike image.attach_bytes,
+                    // losing its acknowledgement cannot leave a queued image behind.
+                    if entry.legacy_image_paths.len() <= index {
+                        entry.legacy_image_paths.resize(index + 1, None);
+                    }
+                    if entry.legacy_image_paths[index].is_none() {
+                        let ext = match mime {
+                            "image/png" => "png",
+                            "image/jpeg" => "jpg",
+                            "image/gif" => "gif",
+                            "image/webp" => "webp",
+                            _ => unreachable!(),
+                        };
+                        let name = format!("herune-{}-{index}.{ext}", entry.submission_id);
+                        let result = self.transport()?.call(
+                            "file.attach",
+                            json!({
+                                "session_id":runtime,"name":name,
+                                "data_url":format!("data:{mime};base64,{encoded}")
+                            }),
+                        )?;
+                        let path = result
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .filter(|path| {
+                                !path.is_empty()
+                                    && result.get("attached") == Some(&Value::Bool(true))
+                            })
+                            .ok_or("The gateway did not confirm the staged image path")?;
+                        entry.legacy_image_paths[index] = Some(path.to_owned());
+                        journal.save(entry)?;
+                    }
                 } else {
                     let result = self.transport()?.call(
                         "image.attach_bytes",
@@ -859,6 +1148,22 @@ impl Worker {
             }
             entry.attached = index + 1;
             journal.save(entry)?;
+        }
+        // A known path can be detached idempotently even when a prior attach
+        // acknowledgement was lost. Restage all images after reconnecting.
+        for path in entry.legacy_image_paths.iter().flatten() {
+            let detached = self
+                .transport()?
+                .call("image.detach", json!({"session_id":runtime,"path":path}))?;
+            if !detached.get("detached").is_some_and(Value::is_boolean) {
+                return Err("The gateway did not confirm image cleanup".into());
+            }
+            let attached = self
+                .transport()?
+                .call("image.attach", json!({"session_id":runtime,"path":path}))?;
+            if attached.get("attached") != Some(&Value::Bool(true)) {
+                return Err("The gateway could not attach the staged image".into());
+            }
         }
         if entry.text.as_deref() == Some("") && !entry.input.attachments.is_empty() {
             entry.text = Some("What do you see in this image?".into());
@@ -928,26 +1233,51 @@ impl Worker {
             if seq > self.last + 1 && snapshot.canonical {
                 let epoch = self.epoch.clone();
                 let last = self.last;
+                let mut completed_in_replay = false;
                 match self.transport()?.replay(&snapshot.runtime, &epoch, last)? {
-                    Some(events) => {
-                        for replay in events {
-                            if replay.sequence.is_some_and(|n| n > self.last) {
-                                self.last = replay.sequence.unwrap();
-                                self.notify(Reply::Event {
-                                    origin: self.scope.clone(),
-                                    event: replay,
-                                    replay: true,
-                                });
+                    Some(mut events) => {
+                        // Do not publish a prefix until the entire replay proves
+                        // it bridges the missing range for this stream epoch.
+                        if events.iter().any(|event| {
+                            event.epoch.as_deref() != Some(epoch.as_str())
+                                || event.sequence.is_none()
+                        }) {
+                            return self.attach();
+                        }
+                        events.retain(|event| event.sequence.is_some_and(|n| n > last));
+                        events.sort_by_key(|event| event.sequence);
+                        events.dedup_by_key(|event| event.sequence);
+                        let mut next = last;
+                        for event in &events {
+                            let Some(expected) = next.checked_add(1) else {
+                                return self.attach();
+                            };
+                            if event.sequence != Some(expected) {
+                                return self.attach();
                             }
+                            next = expected;
+                        }
+                        if next < seq - 1 {
+                            return self.attach();
+                        }
+                        for replay in events {
+                            self.last = replay.sequence.unwrap();
+                            completed_in_replay |= replay.kind == "message.complete";
+                            let live = replay.sequence == Some(seq);
+                            self.notify(Reply::Event {
+                                origin: self.scope.clone(),
+                                event: if live { event.clone() } else { replay },
+                                replay: !live,
+                            });
                         }
                     }
                     None => return self.attach(),
                 }
                 if seq <= self.last {
+                    if completed_in_replay || event.kind == "message.complete" {
+                        self.attach()?;
+                    }
                     return Ok(());
-                }
-                if seq > self.last + 1 {
-                    return self.attach();
                 }
             }
             self.last = seq;
@@ -1012,14 +1342,37 @@ pub(crate) fn spawn(
                 Ok(Command::Attach) => {
                     worker.reconnect_attempts = 0;
                     if let Err(error) = worker.attach() {
-                        worker.failure(None, error, false);
+                        worker.attach_failed(error);
                     }
                 }
                 Ok(Command::Send(entry, journal)) => {
                     let id = entry.submission_id.clone();
-                    if let Err(error) = worker.submit(entry, &journal) {
-                        worker.failure(Some(id), error, false);
+                    let result = worker.submit(entry, &journal);
+                    // The UI may safely inspect and retire the retained intent
+                    // only after this worker releases its claim.
+                    drop(journal);
+                    match result {
+                        Ok(Some(message)) => worker.notify(Reply::InputRejected {
+                            origin: worker.scope.clone(),
+                            id,
+                            message,
+                        }),
+                        Ok(None) => {}
+                        Err(error) => worker.failure(Some(id), error, false),
                     }
+                }
+                Ok(Command::Discard(entry, journal)) => {
+                    let id = entry.submission_id.clone();
+                    let result = worker.discard(&entry, &journal);
+                    if result.as_ref().err().is_some_and(|error| error.uncertain) {
+                        worker.transport = None;
+                    }
+                    drop(journal);
+                    worker.notify(Reply::Discarded {
+                        origin: worker.scope.clone(),
+                        id,
+                        result,
+                    });
                 }
                 Ok(Command::Control(Control::Respond {
                     prompt_id,
@@ -1044,7 +1397,7 @@ pub(crate) fn spawn(
                     && Instant::now() >= worker.reconnect_at
                 {
                     if let Err(error) = worker.attach() {
-                        worker.failure(None, error, true);
+                        worker.attach_failed(error);
                     }
                 }
                 continue;
@@ -1238,6 +1591,7 @@ pub(crate) fn control(
                 id: None,
                 message: error.message,
                 uncertain: error.uncertain,
+                stream_loss: false,
             },
         };
         if replies.send(reply).is_ok() {
@@ -1324,6 +1678,59 @@ fn admission_status(value: &Value, runtime: &str, canonical: bool) -> Result<Str
     }
     .into())
 }
+fn exact_legacy_status(runtime: &str, stored: &str, value: &Value, status: &str) -> bool {
+    let Some(rows) = value.get("sessions").and_then(Value::as_array) else {
+        return false;
+    };
+    let mut matches = rows
+        .iter()
+        .filter(|row| row.get("id").and_then(Value::as_str) == Some(runtime));
+    let Some(row) = matches.next() else {
+        return false;
+    };
+    matches.next().is_none()
+        && row.get("session_key").and_then(Value::as_str) == Some(stored)
+        && row.get("status").and_then(Value::as_str) == Some(status)
+        && row.get("message_count").and_then(Value::as_u64) == Some(0)
+        && (status != "starting" || row.get("preview").and_then(Value::as_str) == Some(""))
+}
+
+fn validate_transfer_limits(
+    attachments: &[AttachmentInput],
+    large_frames: bool,
+    canonical: bool,
+) -> Result<(), String> {
+    use std::io::Read;
+    for file in attachments {
+        let mut input = std::fs::File::open(&file.path)
+            .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+        let metadata = input
+            .metadata()
+            .map_err(|_| format!("Could not read {}; select the file again", file.name))?;
+        if !metadata.is_file() {
+            return Err(format!("Could not read {}; select a file", file.name));
+        }
+        let mut header = Vec::new();
+        (&mut input)
+            .take(12)
+            .read_to_end(&mut header)
+            .map_err(|_| format!("Could not read {}", file.name))?;
+        let limit = if large_frames || (canonical && image_mime(&header).is_some()) {
+            crate::gateway::MAX_CHAT_ATTACHMENT_BYTES
+        } else {
+            5 * 1024 * 1024
+        };
+        if metadata.len() > limit as u64 {
+            return Err(format!(
+                "{} exceeds the {} MiB attachment limit",
+                file.name,
+                limit / (1024 * 1024)
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")

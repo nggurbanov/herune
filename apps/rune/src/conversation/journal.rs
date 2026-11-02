@@ -65,6 +65,8 @@ pub(crate) struct Prepared {
     pub canonical: Option<bool>,
     pub text: Option<String>,
     pub images: Vec<Value>,
+    #[serde(default)]
+    pub legacy_image_paths: Vec<Option<String>>,
     pub attached: usize,
     pub mutations: Vec<Mutation>,
     pub policy_done: bool,
@@ -134,6 +136,7 @@ impl Prepared {
             canonical: None,
             text: None,
             images: vec![],
+            legacy_image_paths: vec![],
             attached: 0,
             mutations: vec![],
             policy_done: false,

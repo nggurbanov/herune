@@ -81,11 +81,14 @@ impl Snapshot {
             .to_owned();
         valid_scope(&stored)?;
         let info = value.get("info").cloned().unwrap_or_else(|| json!({}));
-        if canonical
-            && profile.is_some_and(|profile| {
-                info.get("profile_name").and_then(Value::as_str) != Some(profile)
-            })
-        {
+        let returned_profile = info.get("profile_name").and_then(Value::as_str);
+        if profile.is_some_and(|profile| {
+            if canonical {
+                returned_profile != Some(profile)
+            } else {
+                returned_profile.is_some_and(|owner| !owner.is_empty() && owner != profile)
+            }
+        }) {
             return Err("Session snapshot profile identity mismatch".into());
         }
         if canonical
@@ -186,6 +189,7 @@ impl From<&str> for CallError {
 pub struct SessionTransport {
     gateway: Gateway,
     pub canonical: bool,
+    protocol_checked: bool,
     pub profile: String,
     provenance: prepared::ProfileProvenance,
     queued: VecDeque<Event>,
@@ -202,6 +206,7 @@ impl SessionTransport {
         Ok(Self {
             gateway,
             canonical,
+            protocol_checked: canonical,
             profile: profile.into(),
             provenance: prepared::ProfileProvenance::Backend(profile.into()),
             queued: VecDeque::new(),
@@ -242,6 +247,20 @@ impl SessionTransport {
             Snapshot::parse_owned(value, name, self.canonical).map_err(Into::into)
         } else {
             Snapshot::parse(value, &self.profile, self.canonical).map_err(Into::into)
+        }
+    }
+    /// Resolve the socket's advertised session authority using a read-only
+    /// request before choosing the wire format of a first mutation.
+    pub(crate) fn negotiate_protocol(&mut self) -> Result<(), CallError> {
+        if self.protocol_checked || self.canonical {
+            return Ok(());
+        }
+        match self.call("profiles.list", json!({"include_sessions":false})) {
+            Ok(_) => Ok(()),
+            // A legacy peer may not expose this optional read. A definite
+            // unknown-method refusal proves no mutation was attempted.
+            Err(error) if error.code == Some(-32601) && !error.uncertain => Ok(()),
+            Err(error) => Err(error),
         }
     }
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, CallError> {
@@ -299,6 +318,7 @@ impl SessionTransport {
             };
             if frame.get("id").and_then(Value::as_u64) == Some(id) && frame.get("method").is_none()
             {
+                self.protocol_checked = true;
                 if let Some(error) = frame.get("error") {
                     let code = error.get("code").and_then(Value::as_i64);
                     let reason = error
@@ -333,6 +353,13 @@ impl SessionTransport {
             Ok(Message::Text(text)) => {
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|_| CallError::from("Invalid conversation event"))?;
+                if !self.protocol_checked
+                    && value["method"] == "event"
+                    && value["params"]["type"] == "gateway.ready"
+                    && value["params"]["payload"]["session_authority"] == true
+                {
+                    self.canonical = true;
+                }
                 self.validate_event_owner(&value)?;
                 Ok(Some(value))
             }
@@ -612,7 +639,12 @@ impl SessionTransport {
                 .collect(),
         ))
     }
-    pub fn replay_media(&mut self, source: &str, stored: &str) -> Result<Value, CallError> {
+    pub fn replay_media(
+        &mut self,
+        source: &str,
+        stored: &str,
+        image: bool,
+    ) -> Result<Value, CallError> {
         self.ensure_profiles()?;
         let source = if source.starts_with("file:") {
             url::Url::parse(source)
@@ -624,24 +656,37 @@ impl SessionTransport {
         } else {
             source.into()
         };
-        let request = if source.starts_with("http://") || source.starts_with("https://") {
-            crate::pages::PageRequest::get("/api/media/proxy").query("url", source)
+        let remote = source.starts_with("http://") || source.starts_with("https://");
+        let request = if remote {
+            crate::pages::PageRequest::get("/api/media/proxy").query("url", &source)
         } else {
             crate::pages::PageRequest::get("/api/fs/read-data-url")
-                .query("path", source)
+                .query("path", &source)
                 .query("session_id", stored)
         };
         let request = self.owned_request(request);
-        self.gateway
-            .page_request(&self.profile, &request)
-            .map_err(CallError::from)
+        match self.gateway.page_request(&self.profile, &request) {
+            Err(error) if image && !remote && error == "Workspace request refused (HTTP 413)" => {
+                let fallback = self.owned_request(
+                    crate::pages::PageRequest::get("/api/fs/download")
+                        .query("path", &source)
+                        .query("session_id", stored)
+                        .image_download(),
+                );
+                self.gateway
+                    .page_request(&self.profile, &fallback)
+                    .map_err(CallError::from)
+            }
+            result => result.map_err(CallError::from),
+        }
     }
     pub fn upload_image(&mut self, data_url: String, name: &str) -> Result<Value, CallError> {
         self.ensure_profiles()?;
         let request = crate::pages::PageRequest::post(
             "/api/chat/image-upload",
             json!({"data_url":data_url,"filename":name}),
-        );
+        )
+        .timeout_secs(120);
         let request = self.owned_request(request);
         let value = self.gateway.page_request(&self.profile, &request)?;
         let path = required_str(&value, "path")?;
@@ -682,6 +727,71 @@ impl SessionTransport {
 mod tests {
     use super::*;
     #[test]
+    fn remote_authority_advertisement_enables_revision_fenced_resume() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let peer = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            ws.send(Message::Text(json!({"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":true}}}).to_string().into())).unwrap();
+            let request: Value =
+                serde_json::from_str(&ws.read().unwrap().into_text().unwrap()).unwrap();
+            assert_eq!(request["method"], "session.resume");
+            assert_eq!(request["params"]["profile"], "work");
+            ws.send(Message::Text(json!({"jsonrpc":"2.0","id":request["id"],"result":{"session_id":"stored","stored_session_id":"stored","revision":3,"execution_generation":4,"info":{"profile_name":"work","desktop_protocol":"hermes-gateway-v1"}}}).to_string().into())).unwrap();
+        });
+        let mut client = SessionTransport::connect(
+            &Connection::Url {
+                endpoint,
+                token: None,
+            },
+            "work",
+        )
+        .unwrap();
+        let snapshot = client.resume("stored").unwrap();
+        assert!(
+            snapshot.canonical,
+            "authority-backed remote session must use revision-fenced mutations"
+        );
+        assert_eq!((snapshot.revision, snapshot.generation), (3, 4));
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn protocol_probe_distinguishes_authority_and_legacy_without_exposing_errors() {
+        for advertised in [true, false] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let peer = std::thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                let mut ws = tungstenite::accept(stream).unwrap();
+                ws.send(Message::Text(json!({"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"session_authority":advertised}}}).to_string().into())).unwrap();
+                let request: Value =
+                    serde_json::from_str(&ws.read().unwrap().into_text().unwrap()).unwrap();
+                assert_eq!(request["method"], "profiles.list");
+                assert_eq!(request["params"]["profile"], "work");
+                ws.send(Message::Text(
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":{"profiles":[]}})
+                        .to_string()
+                        .into(),
+                ))
+                .unwrap();
+            });
+            let mut client = SessionTransport::connect(
+                &Connection::Url {
+                    endpoint,
+                    token: None,
+                },
+                "work",
+            )
+            .unwrap();
+            client.negotiate_protocol().unwrap();
+            assert_eq!(client.canonical, advertised);
+            peer.join().unwrap();
+        }
+    }
+
+    #[test]
     fn remote_dashboard_resume_preserves_its_durable_session_key() {
         for key in ["session_key", "resumed"] {
             let mut value =
@@ -691,6 +801,14 @@ mod tests {
             assert_eq!(snapshot.runtime, "live-handle");
             assert_eq!(snapshot.stored, "stored-history");
         }
+    }
+
+    #[test]
+    fn legacy_snapshot_refuses_explicit_foreign_profile_but_accepts_missing_owner() {
+        let mut value = json!({"session_id":"live","stored_session_id":"stored","info":{"profile_name":"other"}});
+        assert!(Snapshot::parse(&value, "work", false).is_err());
+        value["info"] = json!({});
+        assert!(Snapshot::parse(&value, "work", false).is_ok());
     }
 
     #[test]

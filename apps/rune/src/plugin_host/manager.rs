@@ -1,8 +1,10 @@
 //! Every child request remains bound to the parent-selected gateway principal.
 use super::*;
 mod ambient;
+mod files;
 mod journal;
 mod notifications;
+mod storage;
 use crate::{
     composer::DraftScope,
     gateway::Connection,
@@ -110,7 +112,7 @@ struct Running {
     allowed_profiles: BTreeSet<String>,
     bootstrap_sent: bool,
     storage_path: std::path::PathBuf,
-    storage: Option<Value>,
+    storage: std::collections::BTreeMap<String, Option<String>>,
     saved_at: std::time::Instant,
     feed: crate::gateway::plugin::PluginFeed,
     uploads: super::uploads::Uploads,
@@ -555,7 +557,7 @@ impl PluginHosts {
             allowed_profiles,
             bootstrap_sent: false,
             storage_path,
-            storage: None,
+            storage: Default::default(),
             saved_at: std::time::Instant::now(),
             feed,
             uploads: super::uploads::Uploads::default(),
@@ -570,8 +572,13 @@ impl PluginHosts {
         if let Some(running) = &mut self.running {
             running.process.close();
             for event in running.process.poll().into_iter().flatten() {
-                if event["type"] == "plugin-storage" && valid_storage(&event["values"]) {
-                    running.storage = Some(event["values"].clone());
+                if matches!(
+                    event["type"].as_str(),
+                    Some("plugin-storage-patch" | "plugin-decision-patch")
+                ) {
+                    if let Err(error) = storage::queue(&mut running.storage, &event) {
+                        self.error = Some(error);
+                    }
                 }
             }
         }
@@ -819,6 +826,10 @@ impl PluginHosts {
                                     }
                                 });
                         self.reply(&id, result);
+                    } else if kind == "plugin-data-file" {
+                        let running = self.running.as_ref().unwrap();
+                        let result = files::run(&running.storage_path, &payload);
+                        self.reply(&id, Ok(result));
                     } else if kind == "adopt-sdk-route" {
                         let running = self.running.as_mut().unwrap();
                         if payload["clientOwner"]["connection_id"] != running.request_source
@@ -980,10 +991,11 @@ impl PluginHosts {
                         self.reply(&id, Err("This native host operation is unavailable".into()));
                     }
                 }
-                "plugin-storage" => {
-                    let values = &value["values"];
-                    if valid_storage(values) {
-                        self.running.as_mut().unwrap().storage = Some(values.clone());
+                "plugin-storage-patch" | "plugin-decision-patch" => {
+                    if let Err(error) =
+                        storage::queue(&mut self.running.as_mut().unwrap().storage, &value)
+                    {
+                        self.error = Some(error);
                     }
                 }
                 "plugin-error" | "error" => {
@@ -1043,16 +1055,16 @@ impl PluginHosts {
         let Some(running) = &mut self.running else {
             return;
         };
-        let Some(value) = running.storage.take() else {
+        if running.storage.is_empty() {
             return;
-        };
-        match serde_json::to_vec(&value)
-            .map_err(|_| "Plugin storage could not be encoded".to_owned())
-            .and_then(|bytes| crate::client::private_write(&running.storage_path, &bytes))
-        {
-            Ok(()) => running.saved_at = std::time::Instant::now(),
+        }
+        match storage::apply(&running.storage_path, &running.storage) {
+            Ok(()) => {
+                running.storage.clear();
+                running.saved_at = std::time::Instant::now();
+            }
             Err(error) => {
-                running.storage = Some(value);
+                running.saved_at = std::time::Instant::now();
                 self.error = Some(error);
             }
         }
@@ -1435,6 +1447,128 @@ fn prepare_plugin_socket(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_data_requests_round_trip_through_native_host() {
+        use std::sync::{Arc, Mutex};
+        let dir =
+            std::env::temp_dir().join(format!("herune-plugin-file-host-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(dir.join("plugin-storage")).unwrap();
+        let fixture = Arc::new(Mutex::new(FixtureProcess {
+            alive: true,
+            ..Default::default()
+        }));
+        let owned = fixture.clone();
+        let mut host = PluginHosts::new();
+        host.spawn_fixture = Some(Box::new(move || Ok(ManagedProcess::Fixture(owned.clone()))));
+        let connection = Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: None,
+        };
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "default".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: None,
+        };
+        host.launch(
+            "fixture-document".into(),
+            "fixture-origin".into(),
+            scope.clone(),
+            &connection,
+            None,
+            json!({"profiles":[{"name":"default"}]}),
+        )
+        .unwrap();
+        host.running.as_mut().unwrap().storage_path = dir.join("plugin-storage/source.json");
+        for (op, id) in [
+            ("writeText", uuid::Uuid::new_v4().to_string()),
+            ("readText", uuid::Uuid::new_v4().to_string()),
+        ] {
+            fixture.lock().unwrap().events.push(Ok(json!({"type":"plugin-request","id":id,"kind":"plugin-data-file","payload":{"pluginId":"test.plugin","op":op,"folder":"data","path":"note.txt","text":"persisted"}})));
+            host.poll(&scope, &connection);
+            let response = fixture
+                .lock()
+                .unwrap()
+                .commands
+                .iter()
+                .find(|v| v["id"] == id)
+                .cloned()
+                .unwrap();
+            assert_eq!(response["value"]["ok"], true);
+            if op == "readText" {
+                assert_eq!(response["value"]["text"], "persisted");
+            }
+        }
+        host.close();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn two_plugin_windows_flush_disjoint_changes_when_they_close() {
+        use std::sync::{Arc, Mutex};
+        let dir =
+            std::env::temp_dir().join(format!("herune-plugin-windows-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("storage.json");
+        let connection = Connection::Url {
+            endpoint: "http://127.0.0.1:1".into(),
+            token: Some(uuid::Uuid::new_v4().to_string()),
+        };
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "default".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: None,
+        };
+        let mut windows = Vec::new();
+        for (key, value) in [
+            ("hermes.plugin.a.setting", "one"),
+            ("hermes.plugin.b.setting", "two"),
+        ] {
+            let fixture = Arc::new(Mutex::new(FixtureProcess {
+                alive: true,
+                ..Default::default()
+            }));
+            let owned = fixture.clone();
+            let mut host = PluginHosts::new();
+            host.spawn_fixture = Some(Box::new(move || Ok(ManagedProcess::Fixture(owned.clone()))));
+            host.launch(
+                "fixture-document".into(),
+                "fixture-origin".into(),
+                scope.clone(),
+                &connection,
+                None,
+                json!({"profiles":[{"name":"default"}]}),
+            )
+            .unwrap();
+            host.running.as_mut().unwrap().storage_path = path.clone();
+            fixture.lock().unwrap().events.push(Ok(
+                json!({"type":"plugin-storage-patch","key":key,"value":value}),
+            ));
+            fixture.lock().unwrap().events.push(Ok(
+                json!({"type":"plugin-decision-patch","pluginId":value,"enabled":false}),
+            ));
+            windows.push(host);
+        }
+        for mut host in windows {
+            host.close();
+            assert!(host.error.is_none());
+        }
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["hermes.plugin.a.setting"], "one");
+        assert_eq!(saved["hermes.plugin.b.setting"], "two");
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                saved["hermes.desktop.pluginDecisions.v2"].as_str().unwrap()
+            )
+            .unwrap(),
+            json!({"one":false,"two":false})
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn reopen_uses_owned_live_document_and_recovers_failures() {
         use std::sync::{

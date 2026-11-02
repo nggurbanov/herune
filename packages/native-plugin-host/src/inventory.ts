@@ -1,7 +1,7 @@
 /** Plugin policy adapted from Desktop contrib/plugins-store.ts and runtime-loader.ts
  * at 1f08da749c65f511667b02eacb5b8ed46a2f8c04 (MIT). */
 import { atom } from 'nanostores'
-import { createDecisions, DECISIONS_KEY } from './decisions'
+import { createDecisions } from './decisions'
 import type { createInstalledPluginRuntime } from '../../plugin-sdk/src/plugin-runtime/installed'
 import type { createStorage } from './storage'
 type Runtime = ReturnType<typeof createInstalledPluginRuntime>
@@ -58,7 +58,7 @@ export function createInventory(runtime: Runtime, storage: StoragePort, existing
   async function setEnabled(id: string, enabled: boolean) {
     const handle = handles.get(id), record = records.get()[id]
     if (!handle || !record) throw new Error(`Plugin ${id} is not available`)
-    const next = {...decisions.get(), [id]: enabled}; storage.writeKey(DECISIONS_KEY, JSON.stringify(next)); decisions.set(next)
+    const next = {...decisions.get(), [id]: enabled}; storage.writeDecision(id, enabled, next); decisions.set(next)
     if (enabled) await activate(id); else { epochs.set(id,(epochs.get(id) ?? 0)+1); handle.deactivate(); put({...record, status:'disabled',error:undefined}) }
   }
   function suspend() { const active: string[] = []; for (const [id, handle] of handles) { const record=records.get()[id]; if (!record || !['loaded','activating'].includes(record.status)) continue; active.push(id); epochs.set(id,(epochs.get(id) ?? 0)+1); handle.deactivate(); put({...record,status:'disabled'}) }; return active }

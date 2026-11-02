@@ -52,6 +52,25 @@ Desktop contract; this is process/error isolation, not a new restricted plugin
 language. Native parent authority never sends a token, gateway URL, cookie or
 native ticket into JavaScript.
 
+The native SDK provides `ctx.files.dataFolder` text read/write, listing and
+stat on Unix using a per-plugin private directory. The native file operations
+reject path traversal, symbolic-link traversal, hard-linked files and oversized
+text. This is a bounded subset: arbitrary user folder grants, image data URLs,
+rename, trash and Windows file operations are not implemented. Desktop plugins
+remain trusted executable code; the per-plugin directory is not a sandbox
+against a malicious plugin impersonating another plugin through raw IPC.
+Text writes stage and sync a separate file before publishing it, so an I/O
+failure such as a full filesystem leaves a previously saved file intact. A
+Linux subprocess with an enforced file-size limit reproduced the old loss and
+passed after the change; this does not establish power-loss durability.
+The native manager and SDK adapter passed focused synthetic tests; the complete
+Linux Rust suite passed 1,017 tests with 15 ignored. Actual third-party plugins
+and macOS remain unverified for these operations.
+An isolated Linux native run also loaded a synthetic installed plugin in the
+actual SDK host and verified its private text write, read and list before and
+after a full application restart. Evidence: `standalone-desktop-artifacts/`
+`plugin-data-native-20261102/REPORT.md`.
+
 The native Plugins toolbar opens an installed-extension inventory or an explicit
 local ESM source chooser. The installed inventory reuses original disk discovery,
 package opt-in decisions, enable/disable and hot reload. Backend file/directory
@@ -160,3 +179,74 @@ capture of another desktop. Actual Wry/WebKitGTK feature probing found secure
 loopback/getUserMedia available and both standard/prefixed RTCPeerConnection
 absent on this Linux image. Native live voice uses its separate media engine;
 this plugin host makes no WebRTC capability claim from compile success alone.
+
+### Linux: agent-managed MCP tool in a real chat (2026-11-02)
+
+A bounded native check used Herune binary SHA-256
+`71c44ebf96bacf78fff3f91250be56eefd4cfa04144b8dde6638685b38824803`,
+with Herune source at `b3028958e79e4d1302a4d70c5882625baa9e8fe0` and an
+isolated pinned Hermes backend. Through Capabilities → Connectors, the check
+added a local stdio MCP server, verified the persisted configuration against
+Hermes, and used Test connection to discover its `fixture_echo` tool. A new
+chat then invoked that tool through Hermes `tool_call` and displayed the actual
+`MCP_PRIVATE_RESULT:hello` returned by the MCP server.
+
+The MCP server and model were private synthetic fixtures; the model supplied the
+tool-call decision, while the gateway and MCP protocol path were real. The test
+does not establish real-provider compatibility, remote MCP, reconnection,
+restart persistence, or macOS behavior. This agent-managed MCP flow is separate
+from the desktop plugin SDK and host. Compact evidence is retained locally at
+`standalone-desktop-artifacts/mcp-native-20261102/` beside this checkout.
+
+The native add form now uses Hermes' single-server create endpoint for normal
+stdio and URL servers, avoiding replacement of a previously loaded server map.
+The backend checks duplicate names under its config lock. Editing, the JSON
+editor, and additions with custom headers or other fields not represented by
+that endpoint still use the whole-map replacement API and can conflict with
+concurrent external configuration changes.
+
+A subsequent native Linux check used source `5855c90053` and executable SHA-256
+`b51a803ebafc480a5878bfde7ab90af3d9b36b1dad19c979b903b037b05aaad6` against
+the isolated pinned Hermes backend. After the add form loaded, a separate client
+added a stdio server; submitting the form then preserved both server entries in
+the backend configuration. The first UI attempt failed to reach an off-screen
+optional arguments field; the second omitted that field and passed. This check
+covers the common stdio form only, not editing, custom headers, or macOS.
+Evidence: `standalone-desktop-artifacts/mcp-native-20261102/concurrent-add/`.
+
+### Plugin storage across windows (2026-11-02)
+
+Desktop plugin `ctx.storage` now sends each changed key instead of sending an
+entire localStorage snapshot. The native host merges those changes under a
+cross-process file lock and atomically writes the merged document. Independent
+keys from two windows therefore survive either save order, including when the
+windows close; malformed state is preserved instead of overwritten. The
+existing per-source storage identity remains unchanged.
+
+SDK tests reproduced the stale snapshot overwriting a newer key before the
+change. Native manager and concurrent-file tests cover disjoint writes,
+deletion and corrupt input. An isolated Linux Wry window exercised the actual
+SDK bridge with the new storage event. The existing CSS is carried forward
+byte-for-byte. At that checkpoint, concurrent writes to the shared
+plugin-decision object could still conflict; the follow-up below addresses
+individual plugin decisions. macOS behavior was not tested here.
+
+
+### Plugin enable decisions across windows (2026-11-02)
+
+The host now sends and merges enable/disable decisions by plugin ID under the
+same native storage lock. Changes to different plugins survive independent
+windows closing in either order, while existing v2 choices and the legacy
+disabled list are retained. Invalid saved decisions are preserved with an
+error rather than overwritten. This does not live-sync open windows; competing
+changes to the same plugin still resolve by save order.
+
+A JS inventory regression reproduced the lost decision and passed after the
+change. Native tests exercised concurrent decisions, legacy migration, corrupt
+data and window-close delivery. Typechecking, SDK/Bots/host suites and the
+1015-test Linux Rust run passed (15 ignored); the existing stylesheet was
+carried forward unchanged. These are local synthetic-service checks, not
+macOS or real third-party plugin acceptance.
+An isolated Linux Wry check also clicked Disable on a synthetic SDK plugin and
+observed a single native decision patch with its ID and `false` value; this
+checked the actual host UI-to-bridge path, not a real third-party plugin.

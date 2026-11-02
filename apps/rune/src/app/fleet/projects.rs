@@ -164,7 +164,8 @@ impl Viewer {
         self.fleet_state.projects.select(scope.clone());
         if let Scope::Project(id) = &scope {
             let should_activate = self.fleet_state.projects.tree.as_ref().is_some_and(|tree| {
-                tree.active_id.as_deref() != Some(id.as_str())
+                (self.fleet_state.project_active_pending.is_some()
+                    || tree.active_id.as_deref() != Some(id.as_str()))
                     && tree
                         .projects
                         .iter()
@@ -642,6 +643,17 @@ mod dispatch_tests {
         time::Duration,
     };
 
+    fn after_protocol_probe(
+        socket: &mut tungstenite::WebSocket<std::net::TcpStream>,
+    ) -> serde_json::Value {
+        let probe: serde_json::Value =
+            serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap();
+        assert_eq!(probe["method"], "profiles.list");
+        assert_eq!(probe["params"]["profile"], "work");
+        socket.send(tungstenite::Message::Text(serde_json::json!({"jsonrpc":"2.0","id":probe["id"],"result":{"profiles":[{"name":"work"}]}}).to_string().into())).unwrap();
+        serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap()
+    }
+
     #[test]
     fn show_all_sidebar_action_refreshes_real_tree_requests() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -728,8 +740,7 @@ mod dispatch_tests {
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
                 let mut socket = tungstenite::accept(stream).unwrap();
-                let request: serde_json::Value =
-                    serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap();
+                let request = after_protocol_probe(&mut socket);
                 send.send(request).unwrap();
                 let _ = socket.close(None);
             });
@@ -818,8 +829,7 @@ mod dispatch_tests {
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             let mut socket = tungstenite::accept(stream).unwrap();
-            let request: serde_json::Value =
-                serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap();
+            let request = after_protocol_probe(&mut socket);
             send.send(request).unwrap();
             let _ = socket.close(None);
         });
@@ -897,8 +907,7 @@ mod dispatch_tests {
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
                 let mut socket = tungstenite::accept(stream).unwrap();
-                let lookup: serde_json::Value =
-                    serde_json::from_str(&socket.read().unwrap().into_text().unwrap()).unwrap();
+                let lookup = after_protocol_probe(&mut socket);
                 assert_eq!(lookup["method"], "session.list");
                 socket.send(tungstenite::Message::Text(serde_json::json!({"jsonrpc":"2.0","id":lookup["id"],"result":{"sessions":[]}}).to_string().into())).unwrap();
                 let create: serde_json::Value =

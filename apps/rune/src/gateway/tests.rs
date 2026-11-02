@@ -47,6 +47,93 @@ pub(super) fn http_answer(stream: &mut TcpStream, value: Value) {
 }
 
 #[test]
+fn history_accepts_only_a_profile_owned_continuation_of_the_requested_chat() {
+    for case in [
+        "continuation",
+        "multiple_continuations",
+        "other_profile",
+        "unrelated",
+        "branch",
+        "legacy_reset",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let _ws = tungstenite::accept(stream).unwrap();
+            let (mut http, _) = listener.accept().unwrap();
+            let header = http_request(&mut http);
+            assert!(header.starts_with("GET /api/sessions/root/messages?"));
+            assert!(header.contains("profile=work"));
+            http_answer(
+                &mut http,
+                json!({"profile":"work","session_id":"tip","messages":[{"role":"assistant","text":"Saved reply"}]}),
+            );
+            drop(http);
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut detail = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10))
+                    }
+                    _ => return,
+                }
+            };
+            let header = http_request(&mut detail);
+            assert!(header.starts_with("GET /api/sessions/tip?"));
+            assert!(header.contains("profile=work"));
+            http_answer(
+                &mut detail,
+                json!({"id":"tip","profile":if case == "other_profile" {"other"} else {"work"},"parent_session_id":if case == "unrelated" {Value::Null} else if case == "multiple_continuations" {json!("middle")} else {json!("root")},"source":"gui","session_key":if case == "legacy_reset" {json!("same-route")} else {Value::Null},"model_config":if case == "branch" {json!("{\"_branched_from\":\"root\"}")} else {Value::Null}}),
+            );
+            drop(detail);
+            if matches!(
+                case,
+                "continuation" | "multiple_continuations" | "legacy_reset"
+            ) {
+                listener.set_nonblocking(false).unwrap();
+                if case == "multiple_continuations" {
+                    let (mut middle, _) = listener.accept().unwrap();
+                    let header = http_request(&mut middle);
+                    assert!(header.starts_with("GET /api/sessions/middle?"));
+                    assert!(header.contains("profile=work"));
+                    http_answer(
+                        &mut middle,
+                        json!({"id":"middle","profile":"work","parent_session_id":"root","source":"gui","session_key":null,"model_config":null,"end_reason":"compression"}),
+                    );
+                }
+                let (mut parent, _) = listener.accept().unwrap();
+                let header = http_request(&mut parent);
+                assert!(header.starts_with("GET /api/sessions/root?"));
+                assert!(header.contains("profile=work"));
+                http_answer(
+                    &mut parent,
+                    json!({"id":"root","profile":"work","end_reason":if case == "legacy_reset" {"session_reset"} else {"compression"},"session_key":"same-route"}),
+                );
+            }
+        });
+        let mut gateway = Gateway::connect(&Connection::Url {
+            endpoint,
+            token: None,
+        })
+        .unwrap();
+        let history = gateway.history("work", "root");
+        if matches!(case, "continuation" | "multiple_continuations") {
+            assert_eq!(history.unwrap().messages[0].content, "Saved reply");
+        } else {
+            assert!(history.unwrap_err().contains("History session changed"));
+        }
+        drop(gateway);
+        server.join().unwrap();
+    }
+}
+
+#[test]
 fn remote_reads_preserve_scope_identity_and_ignore_unrelated_rpc_frames() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -110,7 +197,12 @@ fn remote_reads_preserve_scope_identity_and_ignore_unrelated_rpc_frames() {
         assert_eq!(params["order"], "latest");
         assert_eq!(params["include_compacted"], "true");
         assert_eq!(params["inline_images"], "false");
-        assert_eq!(params["token"], "fixture & token");
+        assert!(!params.contains_key("token"));
+        assert!(
+            header
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: fixture & token\r\n")
+        );
         http_answer(
             &mut http,
             json!({"profile":"work","session_id":"tip","messages":[

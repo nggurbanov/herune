@@ -5,7 +5,7 @@ use std::{
     net::TcpListener,
     thread,
 };
-fn request(stream: &mut TcpStream) -> (Url, Value) {
+fn request(stream: &mut TcpStream) -> (Url, Value, String) {
     let mut reader = BufReader::new(stream);
     let mut lines = vec![];
     let mut length = 0;
@@ -27,6 +27,7 @@ fn request(stream: &mut TcpStream) -> (Url, Value) {
     .unwrap();
     let mut bytes = vec![0; length];
     reader.read_exact(&mut bytes).unwrap();
+    let headers = lines.join("");
     (
         url,
         if bytes.is_empty() {
@@ -34,6 +35,7 @@ fn request(stream: &mut TcpStream) -> (Url, Value) {
         } else {
             serde_json::from_slice(&bytes).unwrap()
         },
+        headers,
     )
 }
 #[test]
@@ -44,11 +46,16 @@ fn workspace_writes_preserve_prefix_and_owner_and_do_not_echo_credentials() {
         let (stream, _) = listener.accept().unwrap();
         let _ws = tungstenite::accept(stream).unwrap();
         let (mut stream, _) = listener.accept().unwrap();
-        let (url, body) = request(&mut stream);
+        let (url, body, headers) = request(&mut stream);
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("x-hermes-session-token: private & token\r\n")
+        );
         assert_eq!(url.path(), "/hermes/api/config");
         let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
         assert_eq!(query["profile"], "work");
-        assert_eq!(query["token"], "private & token");
+        assert!(!query.contains_key("token"));
         assert_eq!(body, json!({"changes":{"voice.speed":1.25}}));
         write!(stream,"HTTP/1.1 403 Forbidden\r\nContent-Length: 23\r\nConnection: close\r\n\r\nprivate & token refused").unwrap();
     });
@@ -143,7 +150,7 @@ fn downloads_stream_beyond_json_limit_and_interrupted_transfers_preserve_destina
             let (stream, _) = listener.accept().unwrap();
             let _ws = tungstenite::accept(stream).unwrap();
             let (mut http, _) = listener.accept().unwrap();
-            let (url, _) = request(&mut http);
+            let (url, _, _) = request(&mut http);
             assert_eq!(url.path(), "/api/fs/download");
             let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
             assert_eq!(query["profile"], "research");
@@ -216,7 +223,10 @@ fn plugin_upload_stream_is_multipart_binary_and_keeps_authenticated_owner() {
         reader.read_exact(&mut body).unwrap();
         drop(reader);
         assert!(
-            header.starts_with("POST /prefix/api/plugins/upload?profile=research&token=fixture")
+            header.starts_with("POST /prefix/api/plugins/upload?profile=research ")
+                && header
+                    .to_ascii_lowercase()
+                    .contains("x-hermes-session-token: fixture\r\n")
         );
         assert!(
             header
@@ -263,7 +273,7 @@ fn messaging_test_preserves_business_diagnostic_while_other_refusals_fail_closed
             let (stream, _) = listener.accept().unwrap();
             let _ws = tungstenite::accept(stream).unwrap();
             let (mut http, _) = listener.accept().unwrap();
-            let (url, _) = request(&mut http);
+            let (url, _, _) = request(&mut http);
             assert_eq!(url.path(), expected);
             assert!(
                 url.query_pairs()
@@ -383,4 +393,109 @@ fn live_session_workspace_read_uses_captured_profile_and_keeps_session_mutations
             "{method} must be rejected locally without a session.* wildcard"
         );
     }
+}
+
+#[test]
+fn legacy_live_scope_refusal_is_narrow_and_redacts_other_server_errors() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        for message in [
+            "invalid params for session.list: scope: Extra inputs are not permitted — the client and the Hermes backend are out of sync (different versions); run `hermes update` and restart both",
+            "invalid params for session.list: limit: Extra inputs are not permitted — the client and the Hermes backend are out of sync (private-secret)",
+            "invalid params for session.list: scope: Extra inputs are not permitted — the client and the Hermes backend are out of sync (private-secret)",
+        ] {
+            let Message::Text(raw) = ws.read().unwrap() else {
+                panic!("expected request")
+            };
+            let request: Value = serde_json::from_str(&raw).unwrap();
+            ws.send(Message::Text(
+                json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":4000,"message":message}})
+                    .to_string()
+                    .into(),
+            ))
+            .unwrap();
+        }
+    });
+    let mut gateway = Gateway::connect(&Connection::Url {
+        endpoint,
+        token: None,
+    })
+    .unwrap();
+    let live = || {
+        PageRequest::rpc(
+            "session.list",
+            json!({"scope":"live","limit":200,"include_hidden":false}),
+        )
+    };
+    assert_eq!(
+        gateway.page_request("research", &live()).unwrap_err(),
+        LIVE_SCOPE_UNSUPPORTED
+    );
+    assert_eq!(
+        gateway.page_request("research", &live()).unwrap_err(),
+        "Workspace RPC refused (4000)"
+    );
+    assert_eq!(
+        gateway
+            .page_request(
+                "research",
+                &PageRequest::rpc("session.list", json!({"limit":200}))
+            )
+            .unwrap_err(),
+        "Workspace RPC refused (4000)"
+    );
+    drop(gateway);
+    server.join().unwrap();
+}
+
+#[test]
+fn replay_image_download_rejects_partial_oversize_and_unverified_body() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/hermes", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let _ws = tungstenite::accept(stream).unwrap();
+        for response in [
+            "HTTP/1.1 206 Partial Content\r\nContent-Length: 8\r\nConnection: close\r\n\r\nabcdefgh".to_owned(),
+            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", MAX_CHAT_ATTACHMENT_BYTES + 1),
+            "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc".to_owned(),
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nabc".to_owned(),
+        ] {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (url, _, headers) = request(&mut stream);
+            assert_eq!(url.path(), "/hermes/api/fs/download");
+            let query: HashMap<_, _> = url.query_pairs().into_owned().collect();
+            assert_eq!(query["profile"], "work");
+            assert_eq!(query["session_id"], "stored");
+            assert!(headers.to_ascii_lowercase().contains("x-hermes-session-token: synthetic-token\r\n"));
+            stream.write_all(response.as_bytes()).unwrap();
+        }
+    });
+    let mut gateway = Gateway::connect(&Connection::Url {
+        endpoint,
+        token: Some("synthetic-token".into()),
+    })
+    .unwrap();
+    let req = PageRequest::get("/api/fs/download")
+        .query("path", "/private/image.png")
+        .query("session_id", "stored")
+        .image_download();
+    for expected in [
+        "incomplete",
+        "25 MiB",
+        "unsupported format",
+        "no verifiable length",
+    ] {
+        let error = gateway.page_request("work", &req).unwrap_err();
+        assert!(error.contains(expected), "unexpected error: {error}");
+    }
+    assert!(
+        gateway
+            .page_request("work", &PageRequest::get("/api/other").image_download())
+            .is_err()
+    );
+    server.join().unwrap();
 }

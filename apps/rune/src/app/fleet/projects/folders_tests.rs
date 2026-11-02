@@ -442,7 +442,12 @@ fn remote_runtime_picker_reads_and_writes_captured_source() {
                     }
                     headers.push_str(&h);
                 }
-                assert!(line.contains("token=fixture"), "{line}");
+                assert!(!line.contains("token="), "{line}");
+                assert!(
+                    headers
+                        .to_ascii_lowercase()
+                        .contains("x-hermes-session-token: fixture\r\n")
+                );
                 let body = if index == 0 {
                     r#"{"cwd":"/remote"}"#
                 } else {
@@ -951,16 +956,23 @@ fn held_remote_listing_cannot_replace_new_source_picker() {
                 "{line}"
             );
             assert!(
-                line.contains("profile=work") && line.contains("token=fixture"),
+                line.contains("profile=work") && !line.contains("token="),
                 "{line}"
             );
+            let mut headers = String::new();
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 if line == "\r\n" {
                     break;
                 }
+                headers.push_str(&line);
             }
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("x-hermes-session-token: fixture\r\n")
+            );
             if index == 1 {
                 seen_tx.send(()).unwrap();
                 release_rx.recv_timeout(Duration::from_secs(5)).unwrap();

@@ -2,6 +2,7 @@
 //! every reconnect attaches the known terminal id, and close needs a receipt.
 use super::*;
 use crate::pages::PageRequest;
+use tungstenite::client::IntoClientRequest;
 const META: &str = "\0HERMES_TERMINAL_META:";
 #[derive(Debug)]
 pub enum Frame {
@@ -125,21 +126,72 @@ impl HostTerminal {
         #[cfg(not(target_os = "linux"))]
         let home = None;
         let handshake = gateway.prepared.prepare_ws(
-            url,
+            url.clone(),
             home,
             super::prepared::WsPurpose::Interactive,
             Instant::now() + Duration::from_secs(5),
         )?;
         let stream = connect_tcp(&handshake.url)?;
+        let headers = handshake.request.headers().clone();
+        let private_protocol = handshake.private_protocol;
         let config = tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(2 * 1024 * 1024))
             .max_frame_size(Some(2 * 1024 * 1024));
-        let (socket, response) =
-            tungstenite::client_tls_with_config(handshake.request, stream, Some(config), None)
-                .map_err(
-                    |_| "The remote terminal connection failed (network, TLS or authentication)",
-                )?;
-        if handshake.private_protocol
+        let failure = "The remote terminal connection failed (network, TLS or authentication)";
+        let (socket, response) = match tungstenite::client_tls_with_config(
+            handshake.request,
+            stream,
+            Some(config),
+            None,
+        ) {
+            Ok(connected) => connected,
+            // Recent Webapp gateways require a socket-specific one-use ticket.
+            // A rejected upgrade did not start a shell, so it is safe to retry.
+            Err(tungstenite::HandshakeError::Failure(tungstenite::Error::Http(ref response)))
+                if response.status().as_u16() == 403 && !private_protocol =>
+            {
+                let request = PageRequest::post("/api/webapp/socket-ticket", Value::Null)
+                    .query("socket", "host-terminal")
+                    .provenance(provenance.clone());
+                let value = gateway.page_request(profile, &request).map_err(|_| {
+                    "The gateway refused the remote terminal or could not issue a terminal ticket"
+                })?;
+                let ticket = value
+                    .get("ticket")
+                    .and_then(Value::as_str)
+                    .filter(|ticket| {
+                        !ticket.is_empty()
+                            && ticket.len() <= 1024
+                            && ticket
+                                .bytes()
+                                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-'))
+                    })
+                    .ok_or("The gateway returned an invalid terminal ticket")?;
+                let mut ticket_url = url;
+                ticket_url.query_pairs_mut().append_pair("ticket", ticket);
+                let mut request = ticket_url
+                    .as_str()
+                    .into_client_request()
+                    .map_err(|_| "Invalid terminal ticket request")?;
+                for (name, value) in &headers {
+                    if !matches!(
+                        name.as_str(),
+                        "host"
+                            | "connection"
+                            | "upgrade"
+                            | "sec-websocket-version"
+                            | "sec-websocket-key"
+                    ) {
+                        request.headers_mut().append(name, value.clone());
+                    }
+                }
+                let stream = connect_tcp(&ticket_url)?;
+                tungstenite::client_tls_with_config(request, stream, Some(config), None)
+                    .map_err(|_| failure)?
+            }
+            Err(_) => return Err(failure.into()),
+        };
+        if private_protocol
             && response
                 .headers()
                 .get("Sec-WebSocket-Protocol")
@@ -257,4 +309,123 @@ pub(crate) fn stage_scoped(
         .filter(|s| !s.is_empty() && !s.contains(['\0', '\r', '\n']))
         .map(str::to_owned)
         .ok_or("The remote upload returned no safe path".into())
+}
+
+#[cfg(test)]
+mod ticket_tests {
+    use super::*;
+    use std::{
+        io::{BufRead, BufReader},
+        net::TcpListener,
+        thread,
+    };
+
+    #[test]
+    fn webapp_terminal_uses_a_fresh_owner_authenticated_socket_ticket() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: Some("synthetic-token".into()),
+        };
+        let peer = thread::spawn(move || {
+            let (gateway, _) = listener.accept().unwrap();
+            let _gateway = tungstenite::accept(gateway).unwrap();
+            let (mut rejected, _) = listener.accept().unwrap();
+            rejected
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut reader = BufReader::new(rejected.try_clone().unwrap());
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap();
+            assert!(first.starts_with("GET /api/host-terminal?"));
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            rejected
+                .write_all(
+                    b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            drop(rejected);
+            listener.set_nonblocking(true).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(4);
+            let mut http = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10))
+                    }
+                    _ => return false,
+                }
+            };
+            http.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut reader = BufReader::new(http.try_clone().unwrap());
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                headers.push_str(&line);
+            }
+            assert!(headers.starts_with("POST /api/webapp/socket-ticket?"));
+            assert!(headers.contains("socket=host-terminal"));
+            assert!(headers.contains("profile=work"));
+            assert!(
+                headers
+                    .to_ascii_lowercase()
+                    .contains("x-hermes-session-token: synthetic-token\r\n")
+            );
+            let body = r#"{"ticket":"fresh-ticket-1","ttl_seconds":30}"#;
+            write!(http,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+            drop(http);
+            let (socket, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10))
+                    }
+                    _ => return false,
+                }
+            };
+            let _socket = tungstenite::accept_hdr(
+                socket,
+                |request: &tungstenite::handshake::server::Request, response| {
+                    let url = url::Url::parse(&format!("http://fixture{}", request.uri())).unwrap();
+                    assert_eq!(url.path(), "/api/host-terminal");
+                    let q: HashMap<_, _> = url.query_pairs().into_owned().collect();
+                    assert_eq!(q.get("ticket").map(String::as_str), Some("fresh-ticket-1"));
+                    assert!(!q.contains_key("token"));
+                    assert_eq!(q.get("profile").map(String::as_str), Some("work"));
+                    assert_eq!(q.get("cwd").map(String::as_str), Some("/srv/work"));
+                    Ok(response)
+                },
+            )
+            .unwrap();
+            true
+        });
+        let result = HostTerminal::connect(&connection, "work", "/srv/work", 80, 24, None, false);
+        let connected = result.is_ok();
+        drop(result);
+        let ticket_used = peer.join().unwrap();
+        assert!(
+            connected,
+            "Webapp terminal did not connect with a scoped one-use ticket"
+        );
+        assert!(
+            ticket_used,
+            "the gateway never received a ticket-authenticated terminal request"
+        );
+    }
 }

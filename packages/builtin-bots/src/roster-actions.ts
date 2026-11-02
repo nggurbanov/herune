@@ -96,7 +96,12 @@ export function trackInboundActivity(roster: RosterRow[]) {
     const canonicalSessionId = botCanonicalSessionId(bot)
 
     if (canonicalSessionId) {
-      markSessionUnreadFinished(canonicalSessionId, bot.name)
+      try {
+        markSessionUnreadFinished(canonicalSessionId, bot.name)
+      } catch {
+        // Unread is optional in native hosts; it must not stop the roster or notifications.
+        console.warn('Bot activity could not be marked unread')
+      }
     }
 
     // Roster-hidden bots stay quiet: the mark above accumulates silently

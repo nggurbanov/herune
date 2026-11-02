@@ -1,8 +1,8 @@
 {
   "schema": 1,
-  "source_head": "1f08da749c65f511667b02eacb5b8ed46a2f8c04",
+  "source_head": "2a44d50083f65654d52da5a6550a0ece4103bdd7",
   "build_command": "node apps/rune/scripts/build-plugin-host.mjs",
-  "node": "v26.13.0",
+  "node": "v24.15.0",
   "source_inputs": {
     "apps/rune/scripts/build-plugin-host.mjs": "9450660b5567a6b5038fdf76c3f33f8dfde8606c6942e5e7cd6e36e23768215b",
     "apps/shared/src/ansi.ts": "2b79f0d7de3a64b648733a45e0b26767bed45d341028e2ae9618ee3cc0bb6daa",
@@ -100,11 +100,11 @@
     "packages/builtin-bots/src/pet.tsx": "ceb07a70e978ca0ca0aa26249f1a9ee5310a545ad69c48decfb8c9b6c3102352",
     "packages/builtin-bots/src/plugin.tsx": "46708f729835f705d3b39bd6cc8162278377f75787a4a8f80408ccad93855214",
     "packages/builtin-bots/src/profile-config.tsx": "d817d53ac6b1839f383e1e3014cbb64c19daac471f02d147a7b152404cb7f7b1",
-    "packages/builtin-bots/src/profile-ops.ts": "9a4598790ec744673645c4ed74a3d2b7b10809c6fbe5c5702bb2c0b8dcf3bbc6",
+    "packages/builtin-bots/src/profile-ops.ts": "7647bd293e1b5c34b499e5859d7fdde8d181a0c8c28d8b22665d847f6baf6b8a",
     "packages/builtin-bots/src/recent-session.ts": "755ecc39632b362b6d3a05d2a7af39cf9fef56a8b8f8f402ed6c4b1b77275ccf",
     "packages/builtin-bots/src/relay-budget.ts": "a9fa2ed2ab1bae7ca6749347944b041b01c36ae58bb5ba57977d51819068bb7d",
     "packages/builtin-bots/src/relay.ts": "ed33552be0a03aba49709aee248a19b5394ef101ee61b9c82c247b32c1cd95c4",
-    "packages/builtin-bots/src/roster-actions.ts": "945f0a1ca0a2c53bb773bb239c975dc583a1de7ba5c3fe2ce9da8aba8a34c08a",
+    "packages/builtin-bots/src/roster-actions.ts": "41ccdd7722190f07b657c78cce6d17dfa6e1299aca3dc57ed45f67f2aa599f84",
     "packages/builtin-bots/src/roster-pane-content.tsx": "d906dee7f3b03d5b1f4c8017484eef45de3ae941d26682ab3b34282cb8eb3820",
     "packages/builtin-bots/src/roster-pane-derivation.ts": "d3f362d6587fa3bd9ba64620321fa5e27939e6abb9f019df31550a023c2d1573",
     "packages/builtin-bots/src/roster-pane-dialogs.tsx": "51f973c68e91858839c62c8c345f3ae11a4bf0baccb809a79c66f2ddf8a7f65b",
@@ -140,7 +140,7 @@
     "packages/native-plugin-host/src/fonts/JetBrainsMono-Italic.woff2": "9f158b85eca345daeee01dfffa602709a905ea08b0cc60dbf6153cbbd97da08f",
     "packages/native-plugin-host/src/fonts/JetBrainsMono-Regular.woff2": "f1a7a03672cdd494ce0d5543fac6e4360fe22403c6de297fdc2e55a815f7baff",
     "packages/native-plugin-host/src/fonts/OFL-JetBrainsMono.txt": "a76abf002c49097d146e86740a3105a5d00450b1592e820a1109a8c5680cd697",
-    "packages/native-plugin-host/src/gateway.ts": "f8e1086db86cce6d7ce1ada1b69cd918e3b8195a77bea7a514c973d9e0ecd24c",
+    "packages/native-plugin-host/src/gateway.ts": "dd422f4ae040c9a22196a788f5397b77e791d7058696307473cb83204cf794e9",
     "packages/native-plugin-host/src/host-views.tsx": "9aa40945be571d142dba76c1b9de1fdc16ab8f9bd47469c8727284528a09e680",
     "packages/native-plugin-host/src/host.tsx": "17f382e967f008cf8f3d392e8fc62bfcfcbe72e9fc2eba66719e0ad73695a658",
     "packages/native-plugin-host/src/i18n/en_app_tour.ts": "56510a275b0430f3be7eb61bbdc2fbff0e57d9f24a124b819c9348eff3a06be6",
@@ -181,16 +181,16 @@
     "packages/native-plugin-host/src/i18n/field-copy.ts": "55e84fc8c967874d41070b7a4b29c8af648035061dee60f7ddbc716a0738251d",
     "packages/native-plugin-host/src/i18n/service.ts": "d1c65bf366ddbe8808f9f1b8f88ff4d280129589d71f25c73f31c7a1aa65e8ee",
     "packages/native-plugin-host/src/index.ts": "5f989119027178c78d7fd0f60d7a9a4f013b63e05a43cd82ad69cf2d727e9356",
-    "packages/native-plugin-host/src/inventory.ts": "0aaf6629109b40bb65cfb21e4994cba1c9e9c6acee6b6f1940c16f9bec5a245c",
+    "packages/native-plugin-host/src/inventory.ts": "5da7b7fdc8d27ee31e48e5e0b97ca04349bb41c4317fd33326cca9b77ba81650",
     "packages/native-plugin-host/src/notifications.ts": "37df56cbdc641cd697ebf395e22be5eb1f760ca4d41208443d1beb6000d137aa",
     "packages/native-plugin-host/src/open-target.ts": "f7f7024df4851fd1504b58c5bb0e6e7fae08b182ba08f084cc7cf57cbe84c796",
     "packages/native-plugin-host/src/pane-visibility.tsx": "9353229b01301f4693197940f35b0597ec84f671a9b8d9fb47859d31c008c45a",
     "packages/native-plugin-host/src/plugin-socket.ts": "979620712e4bd499aef755f3441bfa762307929f633c4f37226b5cbfcaa20682",
     "packages/native-plugin-host/src/registry.ts": "67698ab00577e17452c8948de80686daa4d743a6530ba651bf0453f386a6427a",
-    "packages/native-plugin-host/src/services.ts": "cc04df5c319e5dc391bb582e8b675f8357ef02b4d2c328e01845515a53afbd5a",
+    "packages/native-plugin-host/src/services.ts": "bfeab26a226bdcad2e77bc5450bd8574edd1f9e6ddeeb1961800619e5c894bf9",
     "packages/native-plugin-host/src/session-status.tsx": "a6d8fe4c485b8ca29ba8f0906c06d30417a39e2f964198f9fac1725845a6b708",
     "packages/native-plugin-host/src/socket.ts": "888b9fb2d6e0b7ed8fce15109d6d29e5012f5614738857ed27e5d6fe0b97e57f",
-    "packages/native-plugin-host/src/storage.ts": "b5bd297a8fbf71f48495e57a260f6e9bc0c72ef411e82ed9f187d2af74e55fd9",
+    "packages/native-plugin-host/src/storage.ts": "324b78a3171b251b16a0e86538a3a3197b7dae5b4ec42b9778cc7019186e385a",
     "packages/native-plugin-host/src/styles.css": "27fb5cb36f7b3975aa81ed4aeedbfd45b83d53accba40f58354725a619c37790",
     "packages/plugin-sdk/package.json": "5db903b525703ca954c7752d58ecbd79a1585688d3299aa1a78ea7691a2cbdeb",
     "packages/plugin-sdk/src/chrome-contributions.ts": "f8cbf9a03b55445050884e2d35db067441f6ec929f4b9247127077fbefd19d32",
@@ -206,7 +206,7 @@
     "packages/plugin-sdk/src/host-helpers.ts": "5a4160e3e3bee66aa70d8d38aeb0835d29c1e22695ddad47c896f56a5fedad38",
     "packages/plugin-sdk/src/host-types.ts": "9e4cdb30e5105c0a5f7ecb4d64ad66e3988e24d04f9d1ec6fc0dbbc706e47129",
     "packages/plugin-sdk/src/host-ui.tsx": "bd1bbb2dab842acfb1f42b350b832c92d8b18195827299554cfc264eb09f3510",
-    "packages/plugin-sdk/src/host.ts": "f295e90d13cbe25b0d029a5adda9ec70fa355626e809060bc0d03ea53eb1b633",
+    "packages/plugin-sdk/src/host.ts": "10aa2637b21f9f9c5b222c13f88e1395cb360daeb034716dd6934f87442d606e",
     "packages/plugin-sdk/src/i18n/localized-tab-title.tsx": "55f5d6751cd753c671c5c6c5864376d00decc74fee97601b37a2407c48d904d5",
     "packages/plugin-sdk/src/i18n/ports.ts": "4dcfd80fa6ad937da067ecc42fd246c75f199845d104747fa15e8dc3be2cae78",
     "packages/plugin-sdk/src/i18n/types_app_tour.ts": "7baa8b0684c870d1bd232095ab786557d20600e200638bb00652bf1c32452352",
@@ -2271,8 +2271,8 @@
   ],
   "assets": {
     "host.js": {
-      "bytes": 662989,
-      "sha256": "c39a854074e99de34fbfd4dec8ba7d66929854203b0c65e77359cfd848c12562"
+      "bytes": 664622,
+      "sha256": "d3beee4b1ef794fb43d71008c5e3cac332a2047115f8535703bd68e383ebdcd4"
     },
     "chunk-D32TOXHM-CrYSND-0.js": {
       "bytes": 654485,
@@ -2286,25 +2286,25 @@
       "bytes": 61,
       "sha256": "adcc8c28ff7f5846cf4a4645faf8534386823c7d56d84bb1c70e30f184208cd5"
     },
-    "plugin-BVk4cQHw.js": {
-      "bytes": 387503,
-      "sha256": "45ab84e11d8793a1cbea22b6dec60dc8967da411de6532ccc4dff3a46763d73c"
+    "plugin-BmejoCRZ.js": {
+      "bytes": 387592,
+      "sha256": "d9c7206e9382b3b74392c223131dab553e29be47a96373053b3450d02aa0f0e4"
     },
-    "profile-ops-An0ISqWc.js": {
-      "bytes": 150329,
-      "sha256": "62a6248ddd95c67d547a1258e3e838cf9453c302e2dbd2e2344f19f4fe5ad2e6"
+    "profile-ops-B-7acKk0.js": {
+      "bytes": 150417,
+      "sha256": "b9d1f2c9048afcd1b177c388138c08439b081d08ae66c8c4317bdcecefe91257"
     },
-    "profile-ops-BCOx9qs6.js": {
+    "profile-ops-BsNErqY3.js": {
       "bytes": 66,
-      "sha256": "18f71d3b44775f84ec06906787e379523a9264ce2c455126cf4611594eb847e1"
+      "sha256": "ec5a05e50cb07ed5139514ccbbf18507799a2e9158a29adf523c4934c1218714"
     },
     "rfb-BLe_zAOa.js": {
       "bytes": 236738,
       "sha256": "b3ebc462ce1e1eca0d838f5eb010b0a772fb5b741e32327f6763450b41e11630"
     },
-    "src-BIPerHl7.js": {
-      "bytes": 511364,
-      "sha256": "c7be9ea48efdb0c780b77d1534e201062e9e43aae6e5f3e242eb21e264ef93fd"
+    "src-sEcoLhFA.js": {
+      "bytes": 511346,
+      "sha256": "b9a7b1ad6f6dc8fa944c56ae98b5baf2134e16f46d68629d2e12f54ae765873b"
     },
     "host.css": {
       "bytes": 2202796,
@@ -2313,11 +2313,17 @@
   },
   "archive": {
     "file": "assets.json.gz",
-    "bytes": 2059042,
-    "sha256": "dc47f97fdcb9cbb238523f59901e5c81852baa40370ecc40e069b24791f64db2"
+    "bytes": 2059528,
+    "sha256": "a7450504191e1b7a7267577aa6e4d9641f8b84facc7ad05882b5e9518c0d9868"
   },
   "notices": {
     "file": "THIRD_PARTY_LICENSES.txt",
     "sha256": "caa0dfb3456ac690c35c9599552199770e4939e46cba63258ff52ddb01e841a4"
+  },
+  "preserved_assets": {
+    "host.css": {
+      "from": "7eed08cb7270c301be1779c69da05d5ecbdb06e1:apps/rune/assets/plugin-host/assets.json.gz",
+      "reason": "Keep existing styling; stale local node_modules changed font embedding during regeneration."
+    }
   }
 }

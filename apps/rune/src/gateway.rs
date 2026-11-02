@@ -42,7 +42,9 @@ mod tests;
 mod ws_cloud_tests;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const LIVE_SCOPE_UNSUPPORTED: &str = "Workspace live session scope is unsupported";
 const MAX_BODY: usize = 8 * 1024 * 1024;
+pub(crate) const MAX_CHAT_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
 const HISTORY_LIMIT: usize = 500;
 
 #[derive(Clone)]
@@ -674,15 +676,152 @@ impl Gateway {
             })
             .map(String::as_str)
             .unwrap_or(session);
-        if !value
-            .get("session_id")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id == session || id == resolved)
+        let returned = value.get("session_id").and_then(Value::as_str);
+        if !returned.is_some_and(|id| id == session || id == resolved)
+            && !returned.is_some_and(|id| {
+                self.history_continues_session(profile, session, id, deadline, provenance)
+            })
         {
             return Err("History session changed; refresh the session list".into());
         }
         rows(&value, "messages")?;
         Ok(value)
+    }
+
+    /// A server may rotate the physical transcript after compression while a
+    /// tab still holds its original id. Verify every ancestor on the same
+    /// captured profile before accepting the new transcript identity.
+    fn history_continues_session(
+        &self,
+        profile: &str,
+        requested: &str,
+        returned: &str,
+        deadline: Instant,
+        provenance: Option<&prepared::ProfileProvenance>,
+    ) -> bool {
+        let mut cursor = returned.to_owned();
+        let mut seen = std::collections::HashSet::new();
+        let mut child_key: Option<String> = None;
+        let mut child_seen = false;
+        for _ in 0..1024 {
+            if valid_scope(&cursor).is_err() || !seen.insert(cursor.clone()) {
+                return false;
+            }
+            let Ok(mut url) = self.base.join("api/sessions/") else {
+                return false;
+            };
+            let Ok(mut segments) = url.path_segments_mut() else {
+                return false;
+            };
+            segments.pop_if_empty().push(&cursor);
+            drop(segments);
+            let detail = if let Some(owner) = provenance {
+                let Some(path) = url
+                    .path()
+                    .strip_prefix(self.base.path().trim_end_matches('/'))
+                else {
+                    return false;
+                };
+                let Ok(url) = self.api_url_for(owner, "GET", path) else {
+                    return false;
+                };
+                let Ok(parts) =
+                    self.http_parts_for_method(owner, url, deadline, Some(reqwest::Method::GET))
+                else {
+                    return false;
+                };
+                let Ok(value) = self.get_json_parts(parts, deadline, "Session identity") else {
+                    return false;
+                };
+                if self
+                    .validate_response_owner(owner, &value, "profile", false)
+                    .is_err()
+                {
+                    return false;
+                }
+                value
+            } else {
+                url.query_pairs_mut().append_pair("profile", profile);
+                let Ok(value) = self.get_json(profile, url, deadline, "Session identity") else {
+                    return false;
+                };
+                if value.get("profile").and_then(Value::as_str) != Some(profile) {
+                    return false;
+                }
+                value
+            };
+            if detail.get("id").and_then(Value::as_str) != Some(cursor.as_str()) {
+                return false;
+            }
+            if child_seen {
+                let reason = match detail.get("end_reason") {
+                    Some(Value::Null) => None,
+                    Some(Value::String(reason)) => Some(reason.as_str()),
+                    _ => return false,
+                };
+                if reason == Some("branched") {
+                    return false;
+                }
+                if matches!(
+                    reason,
+                    Some(
+                        "session_reset"
+                            | "session_switch"
+                            | "idle"
+                            | "daily"
+                            | "suspended"
+                            | "resume_pending_expired"
+                    )
+                ) {
+                    let parent = match detail.get("session_key") {
+                        Some(Value::Null) => None,
+                        Some(Value::String(key)) => Some(key.as_str()),
+                        _ => return false,
+                    };
+                    if parent
+                        .zip(child_key.as_deref())
+                        .is_some_and(|(parent, child)| !parent.is_empty() && parent == child)
+                    {
+                        return false;
+                    }
+                }
+            }
+            if cursor == requested {
+                return true;
+            }
+            match detail.get("source") {
+                Some(Value::String(source)) if source != "tool" => {}
+                Some(Value::Null) => {}
+                _ => return false,
+            }
+            let config = match detail.get("model_config") {
+                Some(Value::Null) => Value::Null,
+                Some(Value::Object(value)) => Value::Object(value.clone()),
+                Some(Value::String(value)) => match serde_json::from_str::<Value>(value) {
+                    Ok(Value::Object(value)) => Value::Object(value),
+                    Ok(Value::Null) => Value::Null,
+                    _ => return false,
+                },
+                _ => return false,
+            };
+            if ["_branched_from", "_delegate_from", "_reset_from"]
+                .into_iter()
+                .any(|key| config.get(key).is_some_and(|value| !value.is_null()))
+            {
+                return false;
+            }
+            child_key = match detail.get("session_key") {
+                Some(Value::Null) => None,
+                Some(Value::String(key)) => Some(key.clone()),
+                _ => return false,
+            };
+            child_seen = true;
+            let Some(parent) = detail.get("parent_session_id").and_then(Value::as_str) else {
+                return false;
+            };
+            cursor = parent.to_owned();
+        }
+        false
     }
 
     /// Both reader surfaces use the same profile-bound native HTTP credential

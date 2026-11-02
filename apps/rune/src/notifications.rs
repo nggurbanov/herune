@@ -177,23 +177,46 @@ impl Notifications {
         replay: bool,
         title: &str,
     ) {
+        let principal = self.principal.clone();
+        self.event_from_source(
+            &principal, scope, kind, payload, runtime, replay, title, true,
+        );
+    }
+    pub(crate) fn event_from_source(
+        &mut self,
+        principal: &str,
+        scope: &DraftScope,
+        kind: &str,
+        payload: &Value,
+        runtime: &str,
+        replay: bool,
+        title: &str,
+        allow_actions: bool,
+    ) {
         if replay {
             return;
         }
-        if let Some(notice) = event::notice(scope, kind, payload, runtime, title) {
-            self.dispatch(notice);
+        if let Some(mut notice) = event::notice(scope, kind, payload, runtime, title) {
+            if !allow_actions {
+                notice.buttons.clear();
+            }
+            self.dispatch_from_source(principal, notice);
         }
     }
     /// Also used by client features (background tasks/plugins); no arbitrary command is executable from a body click.
-    pub fn dispatch(&mut self, mut notice: Notice) -> bool {
+    pub fn dispatch(&mut self, notice: Notice) -> bool {
+        let principal = self.principal.clone();
+        self.dispatch_from_source(&principal, notice)
+    }
+    fn dispatch_from_source(&mut self, principal: &str, mut notice: Notice) -> bool {
         if !self.started
-            || self.principal.is_empty()
+            || principal.is_empty()
             || !self.policy.allows(&self.prefs, &notice, Instant::now())
         {
             return false;
         }
         notice.silent |= self.muted;
-        self.submit(notice, false)
+        self.submit_from_source(principal, notice, false)
     }
     /// The host already supplied trusted child-window focus facts. Parent focus is irrelevant.
     pub fn dispatch_plugin(&mut self, mut notice: Notice) -> Option<u64> {
@@ -240,6 +263,10 @@ impl Notifications {
         batch
     }
     fn submit(&mut self, notice: Notice, test: bool) -> bool {
+        let principal = self.principal.clone();
+        self.submit_from_source(&principal, notice, test)
+    }
+    fn submit_from_source(&mut self, principal: &str, notice: Notice, test: bool) -> bool {
         self.sequence += 1;
         if test {
             self.test_id = Some(self.sequence);
@@ -249,7 +276,7 @@ impl Notifications {
             .send_request(service::Command::Show(Request {
                 id: self.sequence,
                 client: self.client,
-                principal: self.principal.clone(),
+                principal: principal.to_owned(),
                 notice,
                 test,
             }))

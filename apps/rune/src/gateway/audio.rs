@@ -565,10 +565,8 @@ mod tests {
                 .1,
             "voice-owner"
         );
-        assert_eq!(
-            request.query_pairs().find(|(k, _)| k == "token").unwrap().1,
-            "synthetic-audio-token"
-        );
+        assert!(!request.query_pairs().any(|(k, _)| k == "token"));
+        let mut auth = false;
         let mut size = 0;
         loop {
             let mut line = String::new();
@@ -576,10 +574,14 @@ mod tests {
             if line == "\r\n" {
                 break;
             }
+            if line.to_ascii_lowercase().trim() == "x-hermes-session-token: synthetic-audio-token" {
+                auth = true;
+            }
             if let Some(length) = line.to_lowercase().strip_prefix("content-length:") {
                 size = length.trim().parse().unwrap();
             }
         }
+        assert!(auth);
         let mut body = vec![0; size];
         reader.read_exact(&mut body).unwrap();
         assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), expected);

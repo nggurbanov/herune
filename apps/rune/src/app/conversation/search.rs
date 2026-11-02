@@ -254,8 +254,13 @@ impl Viewer {
         self.refresh_chat_search();
         let owner = self.chat_search_owner();
         let history = self.chat_history_key();
+        if forward.is_some_and(|direction| self.start_history_search(&owner, direction)) {
+            tx.instant();
+            return;
+        }
         let view = self.chat.searches.view(owner.clone());
         if let Some(forward) = forward {
+            view.history_scan = None;
             view.search.step(forward);
         }
         view.pending = view
@@ -268,6 +273,7 @@ impl Viewer {
                 current,
                 revision: view.revision,
                 mounted_frame: false,
+                wait_layout: false,
             });
         if let Some(pending) = &view.pending {
             tx.scroll_into_view_in(history, format!("message-{}", pending.current.message));
@@ -275,12 +281,146 @@ impl Viewer {
         }
         tx.instant();
     }
+    // Search earlier pages only on explicit navigation, not while the user is typing.
+    // The captured editor and query fence each page and prevent a failed request
+    // from being retried indefinitely.
+    fn start_history_search(&mut self, owner: &Owner, forward: bool) -> bool {
+        let Some(connection) = self.connection.clone() else {
+            return false;
+        };
+        let Some(conversation) = self.conversation.view(&owner.scope) else {
+            return false;
+        };
+        if !conversation.truncated || conversation.history_loading {
+            return false;
+        }
+        let cursor = conversation.history_cursor;
+        let Some(view) = self.chat.searches.views.get(owner) else {
+            return false;
+        };
+        if !view.open
+            || view.input.text.is_empty()
+            || !(view.search.matches.is_empty() || (!forward && view.search.ordinal() == 1))
+        {
+            return false;
+        }
+        let scan = search::HistoryScan {
+            query: view.input.text.clone(),
+            cursor,
+            remaining_pages: 7,
+            anchor: view.search.current().cloned(),
+        };
+        match self.conversation.load_earlier(connection, &owner.scope) {
+            Ok(()) => {
+                self.chat.searches.view(owner.clone()).history_scan = Some(scan);
+                true
+            }
+            Err(error) => {
+                self.client_error = Some(error);
+                true
+            }
+        }
+    }
+
+    pub(crate) fn continue_history_search(&mut self) {
+        let owner = self.chat_search_owner();
+        let Some(scan) = self
+            .chat
+            .searches
+            .views
+            .get(&owner)
+            .and_then(|v| v.history_scan.clone())
+        else {
+            return;
+        };
+        let valid = self.route == Route::Chat
+            && !self.connection_form
+            && self
+                .chat
+                .searches
+                .views
+                .get(&owner)
+                .is_some_and(|v| v.open && v.input.text == scan.query);
+        let Some(conversation) = self.conversation.view(&owner.scope) else {
+            self.chat.searches.view(owner).history_scan = None;
+            return;
+        };
+        if conversation.history_loading {
+            return;
+        }
+        if !valid || conversation.history_cursor <= scan.cursor {
+            self.chat.searches.view(owner).history_scan = None;
+            return;
+        }
+        let cursor = conversation.history_cursor;
+        let truncated = conversation.truncated;
+        let view = self.chat.searches.view(owner.clone());
+        if scan
+            .anchor
+            .as_ref()
+            .is_some_and(|anchor| view.search.current() != Some(anchor))
+        {
+            view.history_scan = None;
+            return;
+        }
+        let found = if scan.anchor.is_some() {
+            view.search.ordinal() > 1
+        } else {
+            !view.search.matches.is_empty()
+        };
+        if found || !truncated {
+            if scan.anchor.is_some() && !view.search.matches.is_empty() {
+                view.search.step(false);
+            }
+            view.history_scan = None;
+            view.pending = view
+                .search
+                .current()
+                .cloned()
+                .map(|current| search::PendingReveal {
+                    owner,
+                    query: scan.query,
+                    current,
+                    revision: view.revision,
+                    mounted_frame: false,
+                    wait_layout: true,
+                });
+            return;
+        }
+        if scan.remaining_pages == 0 {
+            self.chat.searches.view(owner).history_scan = None;
+            return;
+        }
+        let Some(connection) = self.connection.clone() else {
+            self.chat.searches.view(owner).history_scan = None;
+            return;
+        };
+        match self.conversation.load_earlier(connection, &owner.scope) {
+            Ok(()) => {
+                let scan = self
+                    .chat
+                    .searches
+                    .view(owner)
+                    .history_scan
+                    .as_mut()
+                    .unwrap();
+                scan.cursor = cursor;
+                scan.remaining_pages -= 1;
+            }
+            Err(error) => {
+                self.chat.searches.view(owner).history_scan = None;
+                self.client_error = Some(error);
+            }
+        }
+    }
+
     pub(crate) fn poll_chat_search_reveal(&mut self, tx: &mut Tx) -> bool {
         let owner = self.chat_search_owner();
         // Retire requests for unmounted editors and scopes before examining the current one.
         for (held, view) in &mut self.chat.searches.views {
-            if held != &owner {
+            if held != &owner || !view.open {
                 view.pending = None;
+                view.history_scan = None;
             }
         }
         let history = self.chat_history_key();
@@ -300,7 +440,19 @@ impl Viewer {
         {
             return false;
         }
+        // Newly prepended pages must be laid out before their virtual row can
+        // be targeted; otherwise the history anchor can move the first scroll.
+        if pending.wait_layout {
+            pending.wait_layout = false;
+            view.pending = Some(pending);
+            tx.wake_after(std::time::Duration::ZERO);
+            return true;
+        }
         if !pending.mounted_frame {
+            tx.scroll_into_view_in(
+                history.clone(),
+                format!("message-{}", pending.current.message),
+            );
             pending.mounted_frame = true;
             view.pending = Some(pending);
             tx.wake_after(std::time::Duration::ZERO);
@@ -424,6 +576,257 @@ mod tests {
         });
         rt.frame(0.);
     }
+    fn history_search_fixture() -> (Viewer, Owner, std::sync::mpsc::Receiver<(String, usize)>) {
+        let mut viewer = Viewer::empty();
+        viewer.connection = Some(crate::gateway::Connection::Url {
+            endpoint: "https://search-fixture.invalid".into(),
+            token: None,
+        });
+        viewer.connection_form = false;
+        viewer.selected_session = Some("stored-a".into());
+        let owner = viewer.chat_search_owner();
+        let latest =
+            HistoryMessage::from_row(&json!({"row_id": 20, "role":"user", "content":"latest"}));
+        viewer.messages = vec![latest.clone()];
+        let requests = viewer
+            .conversation
+            .fixture_history_reader(&owner.scope, vec![latest], 500);
+        let search = viewer.chat.searches.view(owner.clone());
+        search.open = true;
+        search.input.text = "needle".into();
+        viewer.refresh_chat_search();
+        (viewer, owner, requests)
+    }
+
+    #[test]
+    fn explicit_search_loads_older_pages_until_the_match() {
+        let (mut viewer, owner, requests) = history_search_fixture();
+        viewer.reveal_chat_search(Some(true), &mut Tx::default());
+        assert_eq!(
+            requests
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            ("stored-a".into(), 500)
+        );
+        viewer.conversation.fixture_history_reply(
+            &owner.scope,
+            500,
+            Ok(crate::gateway::History {
+                messages: vec![HistoryMessage::from_row(
+                    &json!({"row_id": 12, "role":"user", "content":"not here"}),
+                )],
+                cursor: 1000,
+                has_more: true,
+            }),
+        );
+        viewer.poll_conversations();
+        assert_eq!(
+            requests
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            ("stored-a".into(), 1000)
+        );
+        viewer.conversation.fixture_history_reply(
+            &owner.scope,
+            1000,
+            Ok(crate::gateway::History {
+                messages: vec![HistoryMessage::from_row(
+                    &json!({"row_id": 7, "role":"user", "content":"the needle is here"}),
+                )],
+                cursor: 1500,
+                has_more: false,
+            }),
+        );
+        viewer.poll_conversations();
+        let search = &viewer.chat.searches.views[&owner];
+        assert_eq!(search.search.matches.len(), 1);
+        assert!(search.pending.is_some());
+        assert!(search.history_scan.is_none());
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_or_superseded_history_search_never_scans_another_owner() {
+        let (mut viewer, owner, requests) = history_search_fixture();
+        viewer.reveal_chat_search(Some(true), &mut Tx::default());
+        requests
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        viewer.conversation.fixture_history_reply(
+            &owner.scope,
+            500,
+            Err("temporary failure".into()),
+        );
+        viewer.poll_conversations();
+        assert!(viewer.chat.searches.views[&owner].history_scan.is_none());
+        assert!(requests.try_recv().is_err());
+        viewer.reveal_chat_search(Some(true), &mut Tx::default());
+        requests
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        viewer.chat.searches.view(owner.clone()).input.text = "different".into();
+        viewer.conversation.fixture_history_reply(
+            &owner.scope,
+            500,
+            Ok(crate::gateway::History {
+                messages: vec![HistoryMessage::from_row(
+                    &json!({"row_id": 12, "role":"user", "content":"old page"}),
+                )],
+                cursor: 1000,
+                has_more: true,
+            }),
+        );
+        viewer.poll_conversations();
+        assert!(viewer.chat.searches.views[&owner].history_scan.is_none());
+        assert!(requests.try_recv().is_err());
+    }
+
+    #[test]
+    fn previous_match_searches_older_and_switching_chat_cancels_the_scan() {
+        let (mut viewer, owner, _) = history_search_fixture();
+        let latest =
+            HistoryMessage::from_row(&json!({"row_id":20,"role":"user","content":"latest needle"}));
+        viewer.messages[0] = latest.clone();
+        let requests = viewer
+            .conversation
+            .fixture_history_reader(&owner.scope, vec![latest], 500);
+        viewer.refresh_chat_search();
+        viewer.reveal_chat_search(Some(false), &mut Tx::default());
+        assert_eq!(
+            requests
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap()
+                .1,
+            500
+        );
+        viewer.conversation.fixture_history_reply(
+            &owner.scope,
+            500,
+            Ok(crate::gateway::History {
+                messages: vec![HistoryMessage::from_row(
+                    &json!({"row_id":7,"role":"user","content":"older needle"}),
+                )],
+                cursor: 1000,
+                has_more: true,
+            }),
+        );
+        viewer.poll_conversations();
+        assert_eq!(
+            viewer.chat.searches.views[&owner]
+                .search
+                .current()
+                .unwrap()
+                .message,
+            "row-7"
+        );
+        assert!(viewer.chat.searches.views[&owner].history_scan.is_none());
+        assert!(requests.try_recv().is_err());
+
+        let (mut viewer, owner, requests) = history_search_fixture();
+        viewer.reveal_chat_search(Some(true), &mut Tx::default());
+        requests
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        viewer.retire_chat_search_reveals();
+        viewer.selected_session = Some("stored-b".into());
+        viewer.conversation.fixture_history_reply(
+            &owner.scope,
+            500,
+            Ok(crate::gateway::History {
+                messages: vec![HistoryMessage::from_row(
+                    &json!({"row_id":7,"role":"user","content":"old page"}),
+                )],
+                cursor: 1000,
+                has_more: true,
+            }),
+        );
+        viewer.poll_conversations();
+        assert!(viewer.chat.searches.views[&owner].history_scan.is_none());
+        assert!(requests.try_recv().is_err());
+        assert_eq!(viewer.selected_session.as_deref(), Some("stored-b"));
+    }
+
+    #[test]
+    fn absent_search_is_bounded_and_can_continue_on_another_request() {
+        let (mut viewer, owner, requests) = history_search_fixture();
+        viewer.reveal_chat_search(Some(true), &mut Tx::default());
+        for index in 0..8 {
+            let (_, cursor) = requests
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap();
+            assert_eq!(cursor, 500 + index * 500);
+            viewer.conversation.fixture_history_reply(
+                &owner.scope,
+                cursor,
+                Ok(crate::gateway::History {
+                    messages: vec![HistoryMessage::from_row(
+                        &json!({"row_id":100-index,"role":"user","content":"no match"}),
+                    )],
+                    cursor: cursor + 500,
+                    has_more: true,
+                }),
+            );
+            viewer.poll_conversations();
+        }
+        assert!(viewer.chat.searches.views[&owner].history_scan.is_none());
+        assert!(requests.try_recv().is_err());
+        viewer.reveal_chat_search(Some(true), &mut Tx::default());
+        assert_eq!(
+            requests
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap()
+                .1,
+            4500
+        );
+    }
+
+    #[test]
+    fn backfilled_search_hit_is_revealed_after_layout() {
+        let (mut viewer, owner, _) = history_search_fixture();
+        let newer: Vec<_> = (22..=521)
+            .map(|row| {
+                HistoryMessage::from_row(
+                    &json!({"row_id":row,"role":"user","content":"newer text"}),
+                )
+            })
+            .collect();
+        viewer.messages = newer.clone();
+        let requests = viewer
+            .conversation
+            .fixture_history_reader(&owner.scope, newer, 500);
+        viewer.refresh_chat_search();
+        let mut rt = Runtime::new(
+            viewer,
+            crate::view::transcript::search_test_timeline,
+            (800., 600.),
+            Env::new(true, 1.),
+        );
+        rt.poll = Some(|s, _, tx| s.poll_chat_search_reveal(tx) | s.poll_conversations());
+        rt.frame(1.0);
+        rt.update(|s, tx| s.reveal_chat_search(Some(true), tx));
+        assert_eq!(
+            requests
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap()
+                .1,
+            500
+        );
+        rt.state.conversation.fixture_history_reply(&owner.scope, 500, Ok(crate::gateway::History {
+            messages: (1..=21).map(|row| HistoryMessage::from_row(&json!({"row_id":row,"role":"user","content":if row == 1 {"needle in earlier history"} else {"older text"}}))).collect(),
+            cursor: 521, has_more: false,
+        }));
+        for _ in 0..8 {
+            rt.frame(1.0);
+        }
+        assert!(
+            rt.elements().iter().any(|el| el.role == "mark"
+                && el.key.as_deref() == Some("search-row-1-part-0-0-6")
+                && el.visible[2] > 0.0
+                && el.visible[3] > 0.0),
+            "the older search result must be mounted and visible"
+        );
+    }
+
     #[test]
     fn edit_preedit_display_change_reaches_search() {
         let mut s = Viewer::empty();

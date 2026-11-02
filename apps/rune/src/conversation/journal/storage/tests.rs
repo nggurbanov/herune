@@ -297,3 +297,36 @@ fn journal_revision_cannot_be_reused_by_a_different_profile_intent() {
             .is_ok()
     );
 }
+
+#[test]
+fn short_state_read_does_not_abort_the_owned_send() {
+    let root = Workspace::new();
+    let journal = root.journal();
+    let entry = prepared();
+    journal.save(&entry).unwrap();
+    let owner = journal.claim(&entry.submission_id).unwrap();
+    let transaction = journal.lock(&entry.submission_id, "state-lock").unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let queued = entry.clone();
+    let worker = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        done_tx.send(owner.save(&queued)).unwrap();
+    });
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(
+        matches!(
+            done_rx.recv_timeout(Duration::from_millis(150)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the owned send must wait for the short state transaction"
+    );
+    drop(transaction);
+    assert!(
+        done_rx
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap()
+            .is_ok()
+    );
+    worker.join().unwrap();
+}
