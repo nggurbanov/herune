@@ -411,12 +411,12 @@ cover the owner refusal; they do not establish malicious-server or macOS behavio
 
 ### Legacy image retry after a lost acknowledgement (2026-11-02)
 
-With the pinned Hermes contract v8, image bytes are first staged as a file and
+With Hermes desktop contract v2 or newer, image bytes are first staged as a file and
 its path is retained with the saved send. Before attaching on each attempt the
 same path is detached, so a lost image-attach acknowledgement does not queue a
 second copy. Discard also detaches known paths on the captured runtime before
 retiring the journal; an unconfirmed cleanup or changed runtime preserves it.
-A first send to a confirmed empty lazy session can proceed after discard. Older
+A first send to a confirmed empty lazy session can proceed after discard. Unknown or v1
 legacy contracts retain their original upload behavior and do not get this retry
 guarantee.
 
@@ -426,3 +426,11 @@ references; afterward it received one with the original file bytes. A separate
 native run discarded the send and then submitted text without the image.
 This is not a real-provider or macOS acceptance claim. Evidence:
 `standalone-desktop-artifacts/image-retry-native-20261102/`.
+
+On 2026-11-02 the same safe retry was extended to contracts v2–v7: the
+retained Hermes v2 source exposes `file.attach`, `image.attach`, and
+`image.detach`, and the v5 source retains the same contract. Socket tests cover
+v2, v5 and v8, as well as the unchanged v1/unknown direct-upload behavior. A
+Linux native run used pinned v8 Hermes with its reported contract changed to v2
+by a private test relay; it is not an actual v2-server or macOS acceptance.
+Evidence: `standalone-desktop-artifacts/image-retry-v2-20261102/`.

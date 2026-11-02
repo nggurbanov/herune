@@ -1044,14 +1044,13 @@ impl Worker {
                         .transport()?
                         .upload_image(format!("data:{mime};base64,{encoded}"), &file.name)?;
                     entry.images.push(image);
-                } else if supports_large_frames
-                    && self
-                        .transport
-                        .as_ref()
-                        .and_then(|transport| transport.snapshot.as_ref())
-                        .and_then(|snapshot| snapshot.info.get("desktop_contract"))
-                        .and_then(Value::as_u64)
-                        .is_some_and(|version| version >= 8)
+                } else if self
+                    .transport
+                    .as_ref()
+                    .and_then(|transport| transport.snapshot.as_ref())
+                    .and_then(|snapshot| snapshot.info.get("desktop_contract"))
+                    .and_then(Value::as_u64)
+                    .is_some_and(|version| version >= 2)
                 {
                     // Stage bytes as an ordinary file first: unlike image.attach_bytes,
                     // losing its acknowledgement cannot leave a queued image behind.
