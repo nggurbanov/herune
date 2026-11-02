@@ -520,3 +520,16 @@ An isolated invocation of pinned Hermes itself confirmed upload 200, data-URL
 read 413 and byte-exact download 200 for a 17 MiB image with an isolated stored
 session. These checks do not establish real-provider, locked-hosted-server or
 macOS acceptance.
+
+### Incomplete replay during an active stream (2026-11-02)
+
+When a live event exposes a sequence gap, the worker now validates the entire
+replay's epoch and contiguous sequence before publishing any replayed events.
+An incomplete replay triggers a fresh session/history read instead of silently
+skipping a missing chunk. A complete replay is ordered and deduplicated before
+the live event; it does not resend the prompt.
+
+Authenticated loopback contracts reproduced the old missing-sequence failure,
+then checked fallback and ordered replay without a mutation. The full Linux
+Rust suite passed 1009 tests with 15 ignored. This is synthetic transport
+evidence; macOS and real-provider behavior were not tested by this increment.

@@ -2652,3 +2652,119 @@ fn legacy_unknown_contract_keeps_direct_small_image_upload() {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[test]
+fn missing_replay_sequence_refreshes_history_without_publishing_partial_events() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(true, 1));
+        history(&listener, json!([]));
+        let replay = request(&mut ws, "session.events.since");
+        assert_eq!(replay["params"]["last_sequence"], 1);
+        let item = |seq| json!({"session_id":"live","type":"message.delta","seq":seq,"replay_epoch":"fixture-epoch","payload":{"text":format!("chunk-{seq}")}});
+        answer(
+            &mut ws,
+            &replay,
+            json!({"replay_epoch":"fixture-epoch","events":[item(2), item(4)]}),
+        );
+        match ws.read() {
+            Ok(frame) => {
+                let req: Value = serde_json::from_str(&frame.into_text().unwrap()).unwrap();
+                assert_eq!(req["method"], "session.resume");
+                assert_eq!(req["params"]["profile"], "work");
+                answer(&mut ws, &req, snapshot(false, 4));
+                history(&listener, json!([]));
+                true
+            }
+            Err(_) => false,
+        }
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let (mut worker, receive) = worker(connection, scope);
+    worker.attach().unwrap();
+    while receive.try_recv().is_ok() {}
+    let event = Event::from_value(&json!({"session_id":"live","type":"message.delta","seq":4,"replay_epoch":"fixture-epoch","payload":{"text":"latest"}})).unwrap();
+    worker.event(event).unwrap();
+    let replies: Vec<_> = receive.try_iter().collect();
+    let refreshed = server.join().unwrap();
+    assert!(
+        refreshed,
+        "incomplete replay must refresh the stored history"
+    );
+    assert!(replies.iter().any(|r| matches!(r, Reply::Snapshot { .. })));
+    assert!(
+        !replies.iter().any(|r| matches!(r, Reply::Event { .. })),
+        "partial replay must not be published"
+    );
+}
+
+#[test]
+fn complete_replay_publishes_in_order_before_the_live_event() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let connection = Connection::Url {
+        endpoint: format!("http://{}", listener.local_addr().unwrap()),
+        token: Some("synthetic-token".into()),
+    };
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        let resume = request(&mut ws, "session.resume");
+        answer(&mut ws, &resume, snapshot(true, 1));
+        history(&listener, json!([]));
+        let replay = request(&mut ws, "session.events.since");
+        let item = |seq| json!({"session_id":"live","type":"message.delta","seq":seq,"replay_epoch":"fixture-epoch","payload":{"text":format!("chunk-{seq}")}});
+        answer(
+            &mut ws,
+            &replay,
+            json!({"replay_epoch":"fixture-epoch","events":[item(3), item(2), item(3)]}),
+        );
+        ws.get_mut()
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+        assert!(
+            matches!(ws.read(), Err(tungstenite::Error::Io(error)) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut)),
+            "replay must not send another prompt or mutate the conversation"
+        );
+    });
+    let scope = DraftScope {
+        draft_origin: None,
+        connection: 1,
+        profile: "work".into(),
+        profile_intent: crate::source::ProfileIntent::Backend,
+        session: Some("stored".into()),
+    };
+    let (mut worker, receive) = worker(connection, scope);
+    worker.attach().unwrap();
+    while receive.try_recv().is_ok() {}
+    let event = Event::from_value(&json!({"session_id":"live","type":"message.delta","seq":4,"replay_epoch":"fixture-epoch","payload":{"text":"latest"}})).unwrap();
+    worker.event(event).unwrap();
+    let events: Vec<_> = receive
+        .try_iter()
+        .filter_map(|reply| match reply {
+            Reply::Event { event, replay, .. } => Some((event.sequence.unwrap(), replay)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(events, vec![(2, true), (3, true), (4, false)]);
+    assert_eq!(worker.last, 4);
+    server.join().unwrap();
+}

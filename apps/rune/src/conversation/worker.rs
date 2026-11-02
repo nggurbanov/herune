@@ -1217,25 +1217,44 @@ impl Worker {
                 let epoch = self.epoch.clone();
                 let last = self.last;
                 match self.transport()?.replay(&snapshot.runtime, &epoch, last)? {
-                    Some(events) => {
-                        for replay in events {
-                            if replay.sequence.is_some_and(|n| n > self.last) {
-                                self.last = replay.sequence.unwrap();
-                                self.notify(Reply::Event {
-                                    origin: self.scope.clone(),
-                                    event: replay,
-                                    replay: true,
-                                });
+                    Some(mut events) => {
+                        // Do not publish a prefix until the entire replay proves
+                        // it bridges the missing range for this stream epoch.
+                        if events.iter().any(|event| {
+                            event.epoch.as_deref() != Some(epoch.as_str())
+                                || event.sequence.is_none()
+                        }) {
+                            return self.attach();
+                        }
+                        events.retain(|event| event.sequence.is_some_and(|n| n > last));
+                        events.sort_by_key(|event| event.sequence);
+                        events.dedup_by_key(|event| event.sequence);
+                        let mut next = last;
+                        for event in &events {
+                            let Some(expected) = next.checked_add(1) else {
+                                return self.attach();
+                            };
+                            if event.sequence != Some(expected) {
+                                return self.attach();
                             }
+                            next = expected;
+                        }
+                        if next < seq - 1 {
+                            return self.attach();
+                        }
+                        for replay in events {
+                            self.last = replay.sequence.unwrap();
+                            self.notify(Reply::Event {
+                                origin: self.scope.clone(),
+                                event: replay,
+                                replay: true,
+                            });
                         }
                     }
                     None => return self.attach(),
                 }
                 if seq <= self.last {
                     return Ok(());
-                }
-                if seq > self.last + 1 {
-                    return self.attach();
                 }
             }
             self.last = seq;
