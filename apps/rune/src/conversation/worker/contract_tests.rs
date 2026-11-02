@@ -145,6 +145,7 @@ fn remote_authority_new_chat_uses_fenced_create_and_admission() {
         history(&listener, json!([]));
         let submit = request(&mut ws, "prompt.submit");
         assert_eq!(submit["params"]["text"], "Hello");
+        assert!(submit["params"].get("surface").is_none());
         assert!(submit["params"]["submission_id"].as_str().is_some());
         answer(
             &mut ws,

@@ -492,7 +492,12 @@ impl Worker {
             .as_deref()
             .unwrap_or(&entry.input.text)
             .to_owned();
-        let mut params = json!({"session_id":runtime,"text":text,"submission_id":entry.submission_id,"queued":true,"surface":entry.input.surface.as_deref().unwrap_or("desktop")});
+        let mut params = json!({"session_id":runtime,"text":text,"submission_id":entry.submission_id,"queued":true});
+        if let Some(surface) = entry.input.surface.as_deref() {
+            params["surface"] = json!(surface);
+        } else if !canonical {
+            params["surface"] = json!("desktop");
+        }
         if let Some(replay) = &entry.input.replay {
             let visible = [entry.replay_refs.join("\n"), replay.visible.clone()]
                 .into_iter()
