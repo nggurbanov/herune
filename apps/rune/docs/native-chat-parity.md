@@ -533,3 +533,13 @@ Authenticated loopback contracts reproduced the old missing-sequence failure,
 then checked fallback and ordered replay without a mutation. The full Linux
 Rust suite passed 1009 tests with 15 ignored. This is synthetic transport
 evidence; macOS and real-provider behavior were not tested by this increment.
+
+If a newly received completion is already present in the replay response, the
+worker now delivers the original live event once, so completion handling and
+notifications are not mistaken for historical replay, and then refreshes the
+stored history. A later completion included in the replay also triggers that
+refresh. An authenticated loopback regression covers both orders and confirms
+that the live event is not duplicated; it does not establish native or
+real-provider acceptance. The first unrestricted common run had an unrelated
+220 ms cloud deadline assertion fail; that test passed in isolation and the
+full retry passed with four test threads (1010 passed, 15 ignored).

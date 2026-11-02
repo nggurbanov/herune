@@ -1216,6 +1216,7 @@ impl Worker {
             if seq > self.last + 1 && snapshot.canonical {
                 let epoch = self.epoch.clone();
                 let last = self.last;
+                let mut completed_in_replay = false;
                 match self.transport()?.replay(&snapshot.runtime, &epoch, last)? {
                     Some(mut events) => {
                         // Do not publish a prefix until the entire replay proves
@@ -1244,16 +1245,21 @@ impl Worker {
                         }
                         for replay in events {
                             self.last = replay.sequence.unwrap();
+                            completed_in_replay |= replay.kind == "message.complete";
+                            let live = replay.sequence == Some(seq);
                             self.notify(Reply::Event {
                                 origin: self.scope.clone(),
-                                event: replay,
-                                replay: true,
+                                event: if live { event.clone() } else { replay },
+                                replay: !live,
                             });
                         }
                     }
                     None => return self.attach(),
                 }
                 if seq <= self.last {
+                    if completed_in_replay || event.kind == "message.complete" {
+                        self.attach()?;
+                    }
                     return Ok(());
                 }
             }

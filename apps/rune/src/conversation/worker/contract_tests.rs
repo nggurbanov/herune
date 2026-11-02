@@ -2768,3 +2768,78 @@ fn complete_replay_publishes_in_order_before_the_live_event() {
     assert_eq!(worker.last, 4);
     server.join().unwrap();
 }
+
+#[test]
+fn live_completion_covered_by_replay_is_delivered_once_and_refreshes_history() {
+    for (live_sequence, live_kind) in [(4, "message.complete"), (3, "message.delta")] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let connection = Connection::Url {
+            endpoint: format!("http://{}", listener.local_addr().unwrap()),
+            token: Some("synthetic-token".into()),
+        };
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let resume = request(&mut ws, "session.resume");
+            answer(&mut ws, &resume, snapshot(true, 1));
+            history(&listener, json!([]));
+            let replay = request(&mut ws, "session.events.since");
+            let item = |seq, kind| json!({"session_id":"live","type":kind,"seq":seq,"replay_epoch":"fixture-epoch","payload":{"text":format!("chunk-{seq}")}});
+            answer(
+                &mut ws,
+                &replay,
+                json!({"replay_epoch":"fixture-epoch","events":[item(2,"message.delta"), item(3,"message.delta"), item(4,"message.complete")]}),
+            );
+            match ws.read() {
+                Ok(frame) => {
+                    let req: Value = serde_json::from_str(&frame.into_text().unwrap()).unwrap();
+                    assert_eq!(req["method"], "session.resume");
+                    assert_eq!(req["params"]["profile"], "work");
+                    answer(&mut ws, &req, snapshot(false, 4));
+                    history(&listener, json!([]));
+                    true
+                }
+                Err(_) => false,
+            }
+        });
+        let scope = DraftScope {
+            draft_origin: None,
+            connection: 1,
+            profile: "work".into(),
+            profile_intent: crate::source::ProfileIntent::Backend,
+            session: Some("stored".into()),
+        };
+        let (mut worker, receive) = worker(connection, scope);
+        worker.attach().unwrap();
+        while receive.try_recv().is_ok() {}
+        let event = Event::from_value(&json!({"session_id":"live","type":live_kind,"seq":live_sequence,"replay_epoch":"fixture-epoch","payload":{"text":"live event"}})).unwrap();
+        worker.event(event).unwrap();
+        let replies: Vec<_> = receive.try_iter().collect();
+        let refreshed = server.join().unwrap();
+        assert!(refreshed, "live completion must refresh the stored history");
+        let completions: Vec<_> = replies
+            .iter()
+            .filter_map(|r| match r {
+                Reply::Event { event, replay, .. } if event.kind == "message.complete" => {
+                    Some((*replay, event.payload["text"].as_str().unwrap_or_default()))
+                }
+                _ => None,
+            })
+            .collect();
+        let expected = if live_sequence == 4 {
+            (false, "live event")
+        } else {
+            (true, "chunk-4")
+        };
+        assert_eq!(completions, vec![expected]);
+        let live_count = replies.iter().filter(|r| matches!(r, Reply::Event { event, replay: false, .. } if event.sequence == Some(live_sequence))).count();
+        assert_eq!(
+            live_count, 1,
+            "the originally observed live event must be delivered once"
+        );
+        assert!(replies.iter().any(|r| matches!(r, Reply::Snapshot { .. })));
+    }
+}
