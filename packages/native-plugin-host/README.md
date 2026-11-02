@@ -11,3 +11,7 @@ processing roster activity and notices if that optional capability is missing;
 a confirmed deletion on a host that supports deletion also finishes its local
 cleanup if unread cleanup is unavailable. This does not add unread indicators or
 profile deletion to the native host.
+
+The SDK exposes the identity-tracing callback only when the native host actually
+provides it. Bots can therefore update roster metadata without a diagnostics
+facility; this does not add native profile creation or deletion support.

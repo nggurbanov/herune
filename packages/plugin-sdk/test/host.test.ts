@@ -26,3 +26,17 @@ it('delivers and disposes a host event subscription', () => {
   expect(listener).toHaveBeenCalledTimes(1)
   uninstall()
 })
+
+it('reports an optional identity trace only when the host provides it', () => {
+  const absent = installHostServices({ registerContribution: () => () => {} })
+  try {
+    expect(host.traceIdentityChange).toBeUndefined()
+    expect(() => host.traceIdentityChange?.('bots', 'id', 'event')).not.toThrow()
+  } finally { absent() }
+  const trace = vi.fn()
+  const present = installHostServices({ registerContribution: () => () => {}, traceIdentityChange: trace })
+  try {
+    host.traceIdentityChange?.('bots', 'id', 'event')
+    expect(trace).toHaveBeenCalledWith('bots', 'id', 'event')
+  } finally { present() }
+})

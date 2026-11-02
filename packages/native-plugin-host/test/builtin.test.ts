@@ -46,3 +46,21 @@ it('keeps actual Bots activity notices working when native unread hooks are abse
     warn.mockRestore()
   }
 })
+
+it('updates actual Bots metadata when the native host has no identity trace', async () => {
+  const bridge = new NativeBridge({ postMessage: () => {} })
+  const services = createNativeServices(bridge, localStorage)
+  services.hydrate({ connection_id: 'a', profile: 'default', profiles: ['default', 'work'] })
+  const uninstall = installHostServices(services.host)
+  try {
+    expect(services.host.traceIdentityChange).toBeUndefined()
+    const { $botMeta } = await import('../../builtin-bots/src/data')
+    expect(() => $botMeta.set({ work: { title: 'Work' } })).not.toThrow()
+    expect($botMeta.get().work.title).toBe('Work')
+    $botMeta.set({})
+  } finally {
+    services.disposeNotices()
+    uninstall()
+    bridge.close()
+  }
+})

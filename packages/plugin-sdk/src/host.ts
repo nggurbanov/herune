@@ -2,7 +2,7 @@ import type { WorkspaceMode } from './contribution'
 import type { GatewayEvent } from '@hermes/shared/gateway-events'
 import { requestPluginProfile, type PluginProfileRequestOptions, type PluginProfileRoute } from './profile-request'
 import type { PluginOpenSessionOptions, PluginNewChatOptions, NotificationInput, NotificationAction, WorkspaceOpenOptions, WorkspaceNewSessionTarget } from './host-types'
-import { requireCapability } from './services'
+import { getHostServices, requireCapability } from './services'
 import type { McpOAuthOptions } from './services'
 
 /** Partial public host surface; all operations dispatch to the installed native host. */
@@ -36,7 +36,7 @@ export const host = {
   setWorkspaceScopeAsync(mode: WorkspaceMode, ownerKey: null | string = null, target: WorkspaceNewSessionTarget | null = null) { return requireCapability('setWorkspaceScopeAsync')(mode, ownerKey, target) },
   setWorkspaceOwnerLabel(ownerKey: string, label: string) { return requireCapability('setWorkspaceOwnerLabel')(ownerKey, label) },
   dropLeftoverProfilePrefs(profile: string, connectionId?: null | string) { return requireCapability('dropLeftoverProfilePrefs')(profile, connectionId) },
-  traceIdentityChange(channel: string, key: string, value: string) { return requireCapability('traceIdentityChange')(channel, key, value) },
+  get traceIdentityChange() { return getHostServices().traceIdentityChange },
   async deleteProfile(profile: string | PluginProfileRoute) { return requireCapability('deleteProfile')(profile) },
   async listPersistedSessions(route: PluginProfileRoute | null, options: { profile: string; limit?: number }) { return requireCapability('listPersistedSessions')(route, options) },
   async setPersistedSessionHidden(route: PluginProfileRoute | null, options: { sessionId: string; profile: string; hidden: boolean }) { return requireCapability('setPersistedSessionHidden')(route, options) },
