@@ -1132,6 +1132,13 @@ fn lost_rewind_receipt_retries_exact_identity_and_fences_even_after_revision_adv
 
 #[test]
 fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_owned_turn() {
+    // The composer accepts images above 5 MiB; editing a turn must retain them too.
+    let mut image = vec![0x51; 7 * 1024 * 1024];
+    image[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    let expected_image = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(image)
+    );
     let root = std::env::temp_dir().join(format!("hermes-multimodal-{}", uuid::Uuid::new_v4()));
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let connection = Connection::Url {
@@ -1147,6 +1154,26 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
         let resume = request(&mut ws, "session.resume");
         answer(&mut ws, &resume, snapshot(false, 0));
         history(&listener, json!([]));
+        let (mut download, _) = listener.accept().unwrap();
+        download
+            .set_read_timeout(Some(Duration::from_secs(4)))
+            .unwrap();
+        let mut reader = BufReader::new(&mut download);
+        let mut request_line = String::new();
+        reader.read_line(&mut request_line).unwrap();
+        assert!(request_line.starts_with("GET /api/fs/read-data-url?"));
+        assert!(request_line.contains("profile=work"));
+        assert!(request_line.contains("session_id=stored"));
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let response = json!({"dataUrl": expected_image}).to_string();
+        write!(download, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
+        drop(download);
         let (mut http, _) = listener.accept().unwrap();
         http.set_read_timeout(Some(Duration::from_secs(4))).unwrap();
         let mut reader = BufReader::new(&mut http);
@@ -1168,7 +1195,7 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
         let mut body = vec![0; length];
         std::io::Read::read_exact(&mut reader, &mut body).unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["data_url"], "data:image/png;base64,aW1hZ2U=");
+        assert!(body["data_url"] == expected_image);
         let response = json!({"path":"/staged/image.png","mime_type":"image/png"}).to_string();
         write!(http,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",response.len()).unwrap();
         drop(http);
@@ -1222,7 +1249,7 @@ fn multimodal_edit_stages_exact_files_and_images_before_rewind_then_admits_one_o
         session: Some("stored".into()),
     };
     let row = HistoryMessage::from_row(
-        &json!({"role":"user","row_id":91,"text":"Public request","content":[{"type":"text","text":"private-prefix\nPublic request\nprivate-suffix"},{"type":"image_url","image_url":{"url":"data:image/png;base64,aW1hZ2U="}},{"type":"file","path":"data:text/plain;base64,bm90ZXM=","name":"Notes"}]}),
+        &json!({"role":"user","row_id":91,"text":"Public request","content":[{"type":"text","text":"private-prefix\nPublic request\nprivate-suffix"},{"type":"image_url","image_url":{"url":"/saved/photo.png"}},{"type":"file","path":"data:text/plain;base64,bm90ZXM=","name":"Notes"}]}),
     );
     let replay = ReplayBundle::capture(&connection, &scope, &row)
         .unwrap()

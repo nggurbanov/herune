@@ -493,3 +493,18 @@ scan, source/query retirement, error handling and the page bound. The final
 Rust suite passed 997 tests, with 15 ignored. This does not establish macOS
 acceptance or search in messages beyond the per-action bound without repeating
 the action. Evidence: `standalone-desktop-artifacts/history-search-native-20261102/`.
+
+### Larger images in edited turns (2026-11-02)
+
+Editing a message with a previously sent image no longer rejects it solely for
+exceeding 5 MiB. Images are frozen before the history changes and replayed via
+the existing image-upload endpoint, up to the client's 25 MiB image limit;
+non-image replay retains its 5 MiB limit. The existing 64 MiB total frozen
+budget is enforced as each attachment is saved.
+
+A synthetic authenticated gateway test reads a 7 MiB stored image from the
+captured profile and session, verifies the exact upload, and exercises the
+subsequent edit and submission. The former 5 MiB rejection was reproduced first.
+The agent's read-data-url limit can still prevent recovery of larger remote
+files; this test does not establish every gateway version, real-model behavior,
+or macOS acceptance. Clipboard image paste remains a separate open feature.
