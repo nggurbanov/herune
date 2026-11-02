@@ -340,6 +340,18 @@ impl Gateway {
                     }
                     if let Some(error) = value.get("error") {
                         let code = error["code"].as_i64().unwrap_or(-1);
+                        // Older gateways reject this one field during contract validation.
+                        // Keep the server's potentially sensitive error text out of the UI.
+                        if !plugin
+                            && method == "session.list"
+                            && params["scope"] == "live"
+                            && code == 4000
+                            && error["message"].as_str().is_some_and(|message| {
+                                message.starts_with("invalid params for session.list: scope: Extra inputs are not permitted — the client and the Hermes backend are out of sync")
+                            })
+                        {
+                            return Err(super::LIVE_SCOPE_UNSUPPORTED.into());
+                        }
                         if matches!(method, "process.list" | "process.kill") {
                             if let Some(reason) = error.pointer("/data/reason") {
                                 let token = reason

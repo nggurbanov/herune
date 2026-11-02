@@ -1,4 +1,55 @@
 use super::*;
+#[test]
+fn unsupported_legacy_live_scope_preserves_owned_running_and_retries_on_refresh() {
+    let mut state = SidebarState::new();
+    state.owner_profile = "research".into();
+    state
+        .live
+        .insert(("research".into(), "stale".into()), Status::Working);
+    state
+        .live
+        .insert(("other".into(), "other".into()), Status::Working);
+    state
+        .retained_running
+        .insert(("research".into(), "owned".into()));
+    state.apply(
+        "sidebar.live.research",
+        Err(crate::gateway::LIVE_SCOPE_UNSUPPORTED.into()),
+    );
+    assert!(!state.errors.contains_key("sidebar.live.research"));
+    assert!(
+        !state
+            .live
+            .contains_key(&("research".into(), "stale".into()))
+    );
+    assert!(state.live.contains_key(&("other".into(), "other".into())));
+    assert!(state.status(&session("owned", "research")) == Status::Working);
+    assert!(state.live_requests().is_empty());
+    assert!(
+        state
+            .action(Action::Refresh)
+            .iter()
+            .any(|(op, _)| op == "sidebar.live.research")
+    );
+    state.apply(
+        "sidebar.live.research",
+        Err("Workspace RPC refused (4000)".into()),
+    );
+    assert_eq!(
+        state
+            .errors
+            .get("sidebar.live.research")
+            .map(String::as_str),
+        Some("Workspace RPC refused (4000)")
+    );
+    state.reset_data();
+    assert!(
+        state
+            .live_requests()
+            .iter()
+            .any(|(op, _)| op == "sidebar.live.research")
+    );
+}
 fn session(id: &str, profile: &str) -> SidebarSession {
     SidebarSession {
         id: id.into(),

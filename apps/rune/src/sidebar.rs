@@ -256,6 +256,7 @@ pub struct SidebarState {
     cron_limit: usize,
     batch_missing: bool,
     live_loaded: bool,
+    live_unsupported: HashSet<String>,
     clock: f64,
     connection_key: String,
     recovery: Option<SavedReceipt>,
@@ -311,6 +312,7 @@ impl SidebarState {
             cron_limit: 20,
             batch_missing: false,
             live_loaded: false,
+            live_unsupported: HashSet::new(),
             clock: 0.0,
             connection_key: String::new(),
             recovery: None,
@@ -492,6 +494,7 @@ impl SidebarState {
         self.live.clear();
         self.retained_running.clear();
         self.live_loaded = false;
+        self.live_unsupported.clear();
         self.pending.clear();
         self.errors.clear();
         self.storage.clear();
@@ -612,7 +615,10 @@ impl SidebarState {
         };
         profiles
             .into_iter()
-            .filter(|p| !self.pending.contains(&format!("sidebar.live.{p}")))
+            .filter(|p| {
+                !self.live_unsupported.contains(p)
+                    && !self.pending.contains(&format!("sidebar.live.{p}"))
+            })
             .collect::<Vec<_>>()
             .into_iter()
             .map(|p| {
@@ -838,6 +844,7 @@ impl SidebarState {
     pub fn action(&mut self, action: Action) -> Vec<PageEffect> {
         match action {
             Action::Refresh => {
+                self.live_unsupported.clear();
                 let profile = self.owner_profile.clone();
                 self.load(&profile)
             }
@@ -1305,6 +1312,14 @@ impl SidebarState {
         let value = match result {
             Ok(value) => value,
             Err(error) => {
+                if let Some(profile) = key.strip_prefix("live.") {
+                    if error == crate::gateway::LIVE_SCOPE_UNSUPPORTED {
+                        self.live_unsupported.insert(profile.into());
+                        self.live.retain(|(owner, _), _| owner != profile);
+                        self.errors.remove(op);
+                        return vec![];
+                    }
+                }
                 if key == "batch" && error.contains("HTTP 404") {
                     self.batch_missing = true;
                     return self.legacy_slices();
@@ -1381,6 +1396,7 @@ impl SidebarState {
             return self.load(&profile);
         }
         if let Some(profile) = key.strip_prefix("live.") {
+            self.live_unsupported.remove(profile);
             if let Some(source) = &self.source {
                 let invalid = value["sessions"].as_array().is_some_and(|rows| {
                     rows.iter().any(|row| {

@@ -42,6 +42,7 @@ mod tests;
 mod ws_cloud_tests;
 
 const TIMEOUT: Duration = Duration::from_secs(15);
+pub(crate) const LIVE_SCOPE_UNSUPPORTED: &str = "Workspace live session scope is unsupported";
 const MAX_BODY: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_CHAT_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
 const HISTORY_LIMIT: usize = 500;

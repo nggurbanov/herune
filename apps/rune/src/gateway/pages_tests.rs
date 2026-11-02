@@ -394,3 +394,59 @@ fn live_session_workspace_read_uses_captured_profile_and_keeps_session_mutations
         );
     }
 }
+
+#[test]
+fn legacy_live_scope_refusal_is_narrow_and_redacts_other_server_errors() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut ws = tungstenite::accept(stream).unwrap();
+        for message in [
+            "invalid params for session.list: scope: Extra inputs are not permitted — the client and the Hermes backend are out of sync (different versions); run `hermes update` and restart both",
+            "invalid params for session.list: limit: Extra inputs are not permitted — the client and the Hermes backend are out of sync (private-secret)",
+            "invalid params for session.list: scope: Extra inputs are not permitted — the client and the Hermes backend are out of sync (private-secret)",
+        ] {
+            let Message::Text(raw) = ws.read().unwrap() else {
+                panic!("expected request")
+            };
+            let request: Value = serde_json::from_str(&raw).unwrap();
+            ws.send(Message::Text(
+                json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":4000,"message":message}})
+                    .to_string()
+                    .into(),
+            ))
+            .unwrap();
+        }
+    });
+    let mut gateway = Gateway::connect(&Connection::Url {
+        endpoint,
+        token: None,
+    })
+    .unwrap();
+    let live = || {
+        PageRequest::rpc(
+            "session.list",
+            json!({"scope":"live","limit":200,"include_hidden":false}),
+        )
+    };
+    assert_eq!(
+        gateway.page_request("research", &live()).unwrap_err(),
+        LIVE_SCOPE_UNSUPPORTED
+    );
+    assert_eq!(
+        gateway.page_request("research", &live()).unwrap_err(),
+        "Workspace RPC refused (4000)"
+    );
+    assert_eq!(
+        gateway
+            .page_request(
+                "research",
+                &PageRequest::rpc("session.list", json!({"limit":200}))
+            )
+            .unwrap_err(),
+        "Workspace RPC refused (4000)"
+    );
+    drop(gateway);
+    server.join().unwrap();
+}

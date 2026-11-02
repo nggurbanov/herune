@@ -197,3 +197,16 @@ Stop. The first fixture attempts needed additional gateway methods; the first
 new-binary attempt also checked the second list before it loaded. The corrected
 run passed. This is not acceptance against real gateways or NativeSelf.
 Evidence: `standalone-desktop-artifacts/parked-session-native-20261102/`.
+
+On 2026-11-02, the sidebar gained a narrow compatibility path for an older
+Hermes that rejects the `scope` parameter of `session.list`. Only the exact
+contract-validation refusal is recognized; other RPC 4000 errors remain
+visible. The client retains statuses observed from its own conversations and
+does not attribute the older process-wide active list to a profile. Thus live
+status of conversations not observed by this client remains unknown on that
+backend. A private Linux native run against the pinned Hermes backend and a
+synthetic model exercised two concurrent sessions, switching and stopping one
+while the other continued; both working indicators appeared and the sidebar
+error was absent. Evidence:
+`standalone-desktop-artifacts/sidebar-live-legacy-20261102/`. This is not a
+macOS acceptance or proof of remote status for unobserved sessions.
