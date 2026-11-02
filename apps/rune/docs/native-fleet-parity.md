@@ -154,3 +154,16 @@ cleared each status as its stream stopped or completed. The source/profile
 collision, connection retirement and lost-stream regression passed, as did the
 971-test Linux common suite (15 ignored). This is not macOS or real-provider
 acceptance. Evidence: `standalone-desktop-artifacts/running-status-native-20261102/`.
+
+## Session rename and delete with Hermes (2026-11-02)
+
+A Linux native-window run against an isolated pinned Hermes backend created a
+chat with a local synthetic model, renamed it through the session context menu,
+and confirmed the new title via the backend. It then confirmed Delete in the
+UI and observed a 404 for that session from the same profile. The run used
+Herune binary SHA-256
+`b51a803ebafc480a5878bfde7ab90af3d9b36b1dad19c979b903b037b05aaad6`
+(source `45216cd788`, with no code changes after that executable was built).
+This covers one default-profile chat on Linux, not remote sources, real model
+providers, other history operations, or macOS. Compact evidence is retained at
+`standalone-desktop-artifacts/chat-history-native-20261102/`.
