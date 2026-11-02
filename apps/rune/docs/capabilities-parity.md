@@ -185,3 +185,12 @@ The backend checks duplicate names under its config lock. Editing, the JSON
 editor, and additions with custom headers or other fields not represented by
 that endpoint still use the whole-map replacement API and can conflict with
 concurrent external configuration changes.
+
+A subsequent native Linux check used source `5855c90053` and executable SHA-256
+`b51a803ebafc480a5878bfde7ab90af3d9b36b1dad19c979b903b037b05aaad6` against
+the isolated pinned Hermes backend. After the add form loaded, a separate client
+added a stdio server; submitting the form then preserved both server entries in
+the backend configuration. The first UI attempt failed to reach an off-screen
+optional arguments field; the second omitted that field and passed. This check
+covers the common stdio form only, not editing, custom headers, or macOS.
+Evidence: `standalone-desktop-artifacts/mcp-native-20261102/concurrent-add/`.
