@@ -9,9 +9,11 @@ fn unsupported_legacy_live_scope_preserves_owned_running_and_retries_on_refresh(
     state
         .live
         .insert(("other".into(), "other".into()), Status::Working);
-    state
-        .retained_running
-        .insert(("research".into(), "owned".into()));
+    state.retained_running.insert((
+        "research".into(),
+        "owned".into(),
+        crate::source::ProfileIntent::Backend,
+    ));
     state.apply(
         "sidebar.live.research",
         Err(crate::gateway::LIVE_SCOPE_UNSUPPORTED.into()),

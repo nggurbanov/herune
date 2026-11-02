@@ -239,7 +239,7 @@ pub struct SidebarState {
     pub open_select: Option<String>,
     pub menu: Option<(String, String, rune::PointerPress)>,
     pub live: HashMap<(String, String), Status>,
-    retained_running: HashSet<(String, String)>,
+    retained_running: HashSet<(String, String, crate::source::ProfileIntent)>,
     pub errors: BTreeMap<String, String>,
     pub pending: HashSet<String>,
     pub notice: Option<String>,
@@ -672,11 +672,13 @@ impl SidebarState {
                 }
             }
         }
-        if row.profile_intent.is_backend()
-            && row.provenance.as_ref() == self.source.as_ref()
+        if row.provenance.as_ref() == self.source.as_ref()
             && row.aliases().into_iter().any(|id| {
-                self.retained_running
-                    .contains(&(row.profile().to_owned(), id.to_owned()))
+                self.retained_running.contains(&(
+                    row.profile().to_owned(),
+                    id.to_owned(),
+                    row.profile_intent,
+                ))
             })
         {
             return Status::Working;
@@ -713,13 +715,13 @@ impl SidebarState {
     ) -> bool {
         let next: HashSet<_> = scopes
             .iter()
-            .filter(|scope| Some(scope.connection) == epoch && scope.profile_intent.is_backend())
+            .filter(|scope| Some(scope.connection) == epoch)
             .filter_map(|scope| {
                 scope
                     .session
                     .as_ref()
                     .filter(|id| !id.is_empty())
-                    .map(|id| (scope.profile.clone(), id.clone()))
+                    .map(|id| (scope.profile.clone(), id.clone(), scope.profile_intent))
             })
             .collect();
         if self.retained_running == next {

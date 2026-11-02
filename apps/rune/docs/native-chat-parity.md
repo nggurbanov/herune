@@ -599,3 +599,11 @@ injected profile routing. The standard test command and a repeat against the
 restored host assets each passed 1,031 tests, with 16 ignored. This does not
 establish native multi-profile or macOS acceptance, nor project-overview search
 results.
+
+For a root-owned sidebar row, Herune now retains the running state of its own
+matching conversation worker using the captured profile intent as well as the
+profile and session ID. A regression checks that a named profile with the same
+name and ID does not inherit that state and that a stale connection epoch clears
+it. The standard and exact-source Rust suites each passed 1,032 tests, with 16
+ignored. This does not add owner identity to an older gateway's process-wide live
+list or establish macOS acceptance.
