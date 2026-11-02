@@ -259,3 +259,16 @@ while a draft is present. All known app and gateway processes exited.
 This is one source, one profile and a synthetic model provider, not proof of
 cross-profile or real-provider behavior or macOS acceptance. The native evidence
 is at `standalone-desktop-artifacts/parallel-sessions-native-20261102/`.
+
+## Native text and image attachments
+
+On 2026-11-02 a Linux native-window test used the actual GTK chooser and pinned
+Hermes gateway in a private home. A text attachment and a PNG were selected in
+successive turns of the same conversation. The gateway-staged files matched the
+selected bytes, the text reached the model fixture, and both replies completed.
+For the non-vision model fixture the PNG was represented to the model as a path
+and an instruction to use `vision_analyze`; the test did not execute that tool
+or establish image understanding. The raw harness check named `model request
+included image` matches that textual hint, not inline image bytes. No real model
+provider or macOS chooser was exercised. Evidence and the PNG hash check are at
+`standalone-desktop-artifacts/attachments-native-20261102/`.
